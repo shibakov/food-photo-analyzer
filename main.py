@@ -7,6 +7,11 @@ from openai import OpenAI
 import json
 
 app = FastAPI()
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class ProductItem(BaseModel):
