@@ -1,17 +1,14 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
-import os
 from openai import OpenAI
-import json
+import os, json, requests, base64
 
 app = FastAPI()
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+IMGUR_CLIENT_ID = os.getenv("IMGUR_CLIENT_ID")
+
 
 class ProductItem(BaseModel):
     product_name: str
@@ -35,26 +32,27 @@ async def analyze_photo(
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Unsupported image format")
 
-    # читаем файл
+    # читаем байты
     image_bytes = await image.read()
     if len(image_bytes) == 0:
         raise HTTPException(status_code=400, detail="Empty file uploaded")
 
-    # prompt
+    # 1️⃣ Загружаем на Imgur → получаем URL
+    image_url = upload_to_imgur(image_bytes)
+
+    # 2️⃣ Промт
     prompt = build_prompt(user_id, meal_type)
 
-    # 🔥 НОВЫЙ Vision вызов через Responses API (работает всегда)
+    # 3️⃣ Вызов Vision
     response = client.responses.create(
         model="gpt-4o",
         input=[
-            {"image": image_bytes},
+            {"image_url": image_url},
             {"text": prompt}
         ]
     )
 
     raw = response.output_text
-
-    # парсим модель
     products, totals = parse_model_output(raw)
 
     return AnalyzeResponse(
@@ -66,31 +64,23 @@ async def analyze_photo(
     )
 
 
+def upload_to_imgur(file_bytes: bytes) -> str:
+    response = requests.post(
+        "https://api.imgur.com/3/image",
+        headers={"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"},
+        data={"image": base64.b64encode(file_bytes)}
+    )
+    data = response.json()
+    return data["data"]["link"]
+
+
 def build_prompt(user_id: Optional[str], meal_type: Optional[str]) -> str:
-    return f"""
-Распознай еду на фото.
-
-Требования:
-- Определи каждый компонент блюда.
-- Верни JSON строго в формате:
-
-{{
-  "products": [
-    {{
-      "product_name": "...",
-      "quantity_g": 150,
-      "confidence": 0.87
-    }}
-  ],
-  "totals": {{
-    "kcal": 500,
-    "protein": 40,
-    "fat": 15,
-    "carbs": 45
-  }}
-}}
-
-Только JSON. Без текста.
+    return """
+Верни JSON:
+{
+  "products": [...],
+  "totals": {...}
+}
 """
 
 
@@ -99,12 +89,11 @@ def parse_model_output(raw: str):
 
     products = [
         ProductItem(
-            product_name=item["product_name"],
-            quantity_g=float(item["quantity_g"]),
-            confidence=float(item.get("confidence", 0.5))
+            product_name=p["product_name"],
+            quantity_g=float(p["quantity_g"]),
+            confidence=float(p.get("confidence", 0.5))
         )
-        for item in data.get("products", [])
+        for p in data.get("products", [])
     ]
 
-    totals = data.get("totals", {}) or {}
-    return products, totals
+    return products, data.get("totals", {})
