@@ -107,6 +107,7 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
             messages=messages,
             max_tokens=1500,
             temperature=0,
+            response_format={"type": "json_object"},
         )
 
         result_text = response.choices[0].message.content or ""
