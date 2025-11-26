@@ -1,4 +1,4 @@
-"""Single-call GPT-4o-mini vision service for food analysis."""
+"""Single-call GPT-4o vision service for food analysis."""
 
 import base64
 from typing import Dict, Any
@@ -13,7 +13,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 def analyze_food(image_path: str) -> Dict[str, Any]:
     """
-    Analyze food photo with GPT-4o-mini using single vision call.
+    Analyze food photo with GPT-4o using single vision call.
     Preprocessed image should be PNG with transparent background.
 
     Returns: JSON with products and totals including individual macros.
@@ -42,10 +42,10 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
             }
         ]
 
-        logger.info(f"Sending {len(b64_img)/1024:.1f}kb image to GPT-4o-mini")
+        logger.info(f"Sending {len(b64_img)/1024:.1f}kb image to GPT-4o")
 
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=messages,
             max_tokens=1500,
             temperature=0,

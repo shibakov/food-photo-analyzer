@@ -88,32 +88,48 @@ async def analyze_photo(image: UploadFile = File(None)):
 @app.post("/recognize")
 async def recognize_food(image: UploadFile = File(None)):
     """
-    Optimized endpoint: preprocess → single GPT-4o-mini vision call.
+    Optimized endpoint: preprocess → single GPT-4o vision call.
     """
+    logging.info(f"Starting /recognize request, content_type: {image.content_type if image else None}")
+
     if not image:
+        logging.error("No image provided in request")
         raise HTTPException(422, "Image field is required")
 
     if image.content_type not in ["image/jpeg", "image/png"]:
+        logging.error(f"Unsupported content_type: {image.content_type}")
         raise HTTPException(422, "Unsupported format (use jpeg/png)")
 
     total_start = time.time()
+    temp_input = None
 
     try:
         # Save uploaded image temporarily
         temp_input = f"/tmp/preprocess/input_{time.time()}.jpg"
+        logging.info(f"Saving temp file: {temp_input}")
         content = await image.read()
+        logging.info(f"Image content length: {len(content)} bytes")
+
         with open(temp_input, 'wb') as f:
             f.write(content)
 
         # Preprocess image
+        logging.info("Starting image preprocessing")
         preprocess_start = time.time()
         processed_path = preprocess_image(temp_input)
         preprocess_time = time.time() - preprocess_start
+        logging.info(f"Preprocessing completed in {preprocess_time:.2f}s, output: {processed_path}")
+
+        # Check if processed file exists
+        if not os.path.exists(processed_path):
+            raise ValueError(f"Processed file not found: {processed_path}")
 
         # GPT analysis
+        logging.info("Starting GPT analysis")
         gpt_start = time.time()
         result_json = analyze_food(processed_path)
         gpt_time = time.time() - gpt_start
+        logging.info(f"GPT analysis completed in {gpt_time:.2f}s with {len(result_json.get('products', []))} products")
 
         # Add timing info
         total_time = time.time() - total_start
@@ -123,14 +139,19 @@ async def recognize_food(image: UploadFile = File(None)):
             "total_ms": round(total_time * 1000, 2),
         }
 
-        # Cleanup temp file
-        try:
-            os.remove(temp_input)
-        except Exception:
-            pass
-
+        logging.info(f"Recognize completed successfully in {total_time:.2f}s")
         return result_json
 
     except Exception as e:
-        logging.exception("Error in /recognize")
+        logging.exception(f"Error in /recognize: {str(e)}")
+        logging.error(f"Total time before error: {time.time() - total_start:.2f}s")
         raise HTTPException(422, f"Recognition error: {str(e)}")
+    finally:
+        # Cleanup temp files
+        for path in [temp_input, processed_path if 'processed_path' in locals() else None]:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logging.info(f"Cleaned up temp file: {path}")
+                except Exception as cleanup_error:
+                    logging.warning(f"Failed to cleanup {path}: {cleanup_error}")

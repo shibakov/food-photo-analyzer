@@ -49,6 +49,10 @@ def remove_background(input_path, output_path):
 def preprocess_image(path):
     """Full preprocessing pipeline: resize -> crop -> remove_bg -> final resize."""
     import os
+    import logging
+
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting preprocessing for: {path}")
 
     base = "/tmp/preprocess"
     os.makedirs(base, exist_ok=True)
@@ -58,14 +62,25 @@ def preprocess_image(path):
     no_bg = f"{base}/no_bg.png"
     final = f"{base}/final.png"
 
-    resize_image(path, resized)
+    try:
+        logger.info("Step 1: Resizing image")
+        resize_image(path, resized)
+        logger.info(f"Resized image saved: {resized}")
 
-    cropped_ok = crop_to_plate(resized, cropped)
-    to_bg = cropped if cropped_ok else resized
+        logger.info("Step 2: Attempting plate cropping")
+        cropped_ok = crop_to_plate(resized, cropped)
+        to_bg = cropped if cropped_ok else resized
+        logger.info(f"Cropping result: {'success' if cropped_ok else 'skipped'}, using: {to_bg}")
 
-    remove_background(to_bg, no_bg)
+        logger.info("Step 3: Removing background")
+        remove_background(to_bg, no_bg)
+        logger.info(f"Background removed: {no_bg}")
 
-    # финальный ресайз
-    resize_image(no_bg, final)
+        logger.info("Step 4: Final resize")
+        resize_image(no_bg, final)
+        logger.info(f"Final image: {final}")
 
-    return final
+        return final
+    except Exception as e:
+        logger.error(f"Preprocessing failed: {str(e)}")
+        raise
