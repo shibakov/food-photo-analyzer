@@ -1,5 +1,5 @@
 fastapi
 uvicorn[standard]
-openai
-python-multipart
+openai>=1.6.0
 pydantic
+python-multipart

@@ -1,14 +1,18 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
+import base64
+import os
 from openai import OpenAI
-import os, json, requests, base64
+import json
 
 app = FastAPI()
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-IMGUR_CLIENT_ID = os.getenv("IMGUR_CLIENT_ID")
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class ProductItem(BaseModel):
     product_name: str
@@ -27,33 +31,63 @@ class AnalyzeResponse(BaseModel):
 async def analyze_photo(
     image: UploadFile = File(...),
     user_id: Optional[str] = Form(None),
-    meal_type: Optional[str] = Form(None),
+    meal_type: Optional[str] = Form(None),  # Breakfast / Lunch / etc
 ):
+    # 1. Валидация формата
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Unsupported image format")
 
-    # читаем байты
+    # 2. Читаем файл и кодируем в base64 data URL
     image_bytes = await image.read()
-    if len(image_bytes) == 0:
-        raise HTTPException(status_code=400, detail="Empty file uploaded")
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{image.content_type};base64,{image_b64}"
 
-    # 1️⃣ Загружаем на Imgur → получаем URL
-    image_url = upload_to_imgur(image_bytes)
+    # 3. Строим промпт
+    prompt = build_prompt(user_id=user_id, meal_type=meal_type)
 
-    # 2️⃣ Промт
-    prompt = build_prompt(user_id, meal_type)
-
-    # 3️⃣ Вызов Vision
+    # 4. Вызываем Responses API с текстом + картинкой
     response = client.responses.create(
         model="gpt-4o",
         input=[
-            {"image_url": image_url},
-            {"text": prompt}
-        ]
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Ты — ассистент-нутрициолог, отвечай только JSON.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": prompt,
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": {
+                            "url": data_url,
+                        },
+                    },
+                ],
+            },
+        ],
+        temperature=0.2,
     )
 
-    raw = response.output_text
-    products, totals = parse_model_output(raw)
+    # 5. Достаём текстовый вывод модели
+    try:
+        raw = response.output[0].content[0].text
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Bad model response structure: {e}")
+
+    # 6. Парсим JSON
+    try:
+        products, totals = parse_model_output(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     return AnalyzeResponse(
         products=products,
@@ -64,36 +98,58 @@ async def analyze_photo(
     )
 
 
-def upload_to_imgur(file_bytes: bytes) -> str:
-    response = requests.post(
-        "https://api.imgur.com/3/image",
-        headers={"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"},
-        data={"image": base64.b64encode(file_bytes)}
-    )
-    data = response.json()
-    return data["data"]["link"]
-
-
 def build_prompt(user_id: Optional[str], meal_type: Optional[str]) -> str:
+    # при желании можно добавить user_id / meal_type в контекст
     return """
-Верни JSON:
+Распознай еду на фото.
+
+Требования:
+- Определи все видимые компоненты блюда (даже если это салат, рагу или набор продуктов).
+- Для каждого компонента определи:
+  - краткое название продукта на русском
+  - примерный вес в граммах (целое число)
+  - уверенность от 0 до 1
+- Точность по составу и весу — около 80–90%. Лучше дай приблизительную оценку, чем пропусти компонент.
+- Если сомневаешься между похожими продуктами, выбери самый типичный вариант для домашней еды.
+
+Верни строгий JSON такого вида:
+
 {
-  "products": [...],
-  "totals": {...}
+  "products": [
+    {
+      "product_name": "курица отварная",
+      "quantity_g": 150,
+      "confidence": 0.87
+    }
+  ],
+  "totals": {
+    "kcal": 500,
+    "protein": 40,
+    "fat": 15,
+    "carbs": 45
+  }
 }
-"""
+
+Не добавляй никаких пояснений, комментариев или текста вне JSON.
+""".strip()
 
 
 def parse_model_output(raw: str):
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # На MVP просто бросаем ошибку
+        raise ValueError("Model returned non-JSON response")
 
     products = [
         ProductItem(
-            product_name=p["product_name"],
-            quantity_g=float(p["quantity_g"]),
-            confidence=float(p.get("confidence", 0.5))
+            product_name=item["product_name"],
+            quantity_g=float(item["quantity_g"]),
+            confidence=float(item.get("confidence", 0.5)),
         )
-        for p in data.get("products", [])
+        for item in data.get("products", [])
     ]
 
-    return products, data.get("totals", {})
+    totals = data.get("totals", {}) or {}
+
+    return products, totals
