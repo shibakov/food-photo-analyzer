@@ -1,4 +1,4 @@
-"""Main FastAPI application."""
+"""Main FastAPI application (updated CORS)."""
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,52 +17,60 @@ app = FastAPI()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# --- CORS: максимально разрешённый вариант для отладки фронта ---
+# --- CORS configuration ---
+# During development and production, specify allowed origins explicitly.
+# Wildcards are not permitted when allow_credentials is True, so here we set
+# allow_credentials to False and list concrete origins. Adjust this list based
+# on your deployment domains.
 app.add_middleware(
-     CORSMiddleware,
-     allow_origins=[
-         "http://localhost:5173",
-         "https://web.telegram.org",
-         "https://*.web.telegram.org",
-         "https://t.me",
-          "my-miniapp-production.up.railway.app",
-         "https://food-photo-analyzer-production.up.railway.app"
-     ],
-     allow_credentials=True,
-     allow_methods=["*"],
-     allow_headers=["*"],
-     expose_headers=["*"],
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "https://web.telegram.org",
+        "https://t.me",
+        "https://my-miniapp-production.up.railway.app",
+        "https://food-photo-analyzer-production.up.railway.app",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
+
+# Provide an OPTIONS handler to satisfy CORS preflight requests for any path.
 @app.options("/{path:path}")
 async def preflight_handler(path: str):
     return {}
 
-# ----------------------------------------------------------------
-
 
 @app.get("/health")
 def health():
+    """Health endpoint to check service status."""
     return {"status": "ok"}
 
 
 @app.post("/analyze")
 async def analyze_photo(image: UploadFile = File(None)):
+    """
+    Full analysis endpoint. Performs computer vision recognition and then
+    refinement of detected products.
+    """
     if not image:
         raise HTTPException(422, "Image field is required")
 
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(422, "Unsupported format (use jpeg/png)")
-    
+
     start_time = time.time()
-    
+
     img_bytes = await image.read()
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
     try:
         # STEP 1 — VISION RECOGNITION
         vision_json = analyze_image_with_vision(img_b64, image.content_type)
-        products = vision_json["products"]
+        products = vision_json.get("products", [])
 
         # STEP 2 — REFINEMENT
         refine_json = refine_products(products)
@@ -79,7 +87,9 @@ async def analyze_photo(image: UploadFile = File(None)):
 
 @app.post("/recognize")
 async def recognize_food(image: UploadFile = File(None)):
-    """Optimized endpoint: preprocess → single GPT-4o-mini vision call."""
+    """
+    Optimized endpoint: preprocess → single GPT-4o-mini vision call.
+    """
     if not image:
         raise HTTPException(422, "Image field is required")
 
