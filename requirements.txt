@@ -3,7 +3,7 @@ uvicorn[standard]
 openai>=1.6.0
 pydantic
 python-multipart
-opencv-python
+opencv-python-headless
 numpy
 Pillow
 rembg
