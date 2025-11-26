@@ -43,11 +43,11 @@ async def analyze_photo(
     prompt = build_prompt(user_id=user_id, meal_type=meal_type)
 
     completion = client.chat.completions.create(
-        model="gpt-4o",  # vision capable
+        model="gpt-4o",
         messages=[
             {
                 "role": "system",
-                "content": "Ты — ассистент-нутрициолог, отвечай строго в формате JSON."
+                "content": "Ты — ассистент-нутрициолог, отвечай только JSON."
             },
             {
                 "role": "user",
@@ -55,7 +55,8 @@ async def analyze_photo(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:{image.content_type};base64,{image_b64}"
+                            # ВАЖНО: только raw base64, без data:image/...
+                            "url": image_b64
                         }
                     },
                     {
@@ -67,6 +68,7 @@ async def analyze_photo(
         ],
         temperature=0.2,
     )
+
 
 
 
