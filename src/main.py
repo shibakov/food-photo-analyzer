@@ -7,7 +7,6 @@ import sys
 import time
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 
 from src.services import analyze_image_with_vision, refine_products
 from src.image_preprocess import preprocess_image
@@ -18,49 +17,16 @@ from src.gpt_vision import analyze_food
 # -----------------------------------
 
 app = FastAPI()
+
+import logging
+import sys
+
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     stream=sys.stdout,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
-@app.middleware("http")
-async def catch_exceptions_middleware(request, call_next):
-    try:
-        return await call_next(request)
-    except Exception as e:
-        logging.exception(f"🔥🔥🔥 Unhandled server error: {e}")
-        raise
-
-# -----------------------------------
-# CORS
-# -----------------------------------
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        # локальный фронт
-        "http://localhost:5173",
-        # прод-миниапп
-        "https://my-miniapp-production.up.railway.app",
-        # телега (на будущее)
-        "https://web.telegram.org",
-        "https://app.telegram.org",
-        "https://t.me",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Если хочешь, можно вообще открыть для всех:
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=False,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
 
 # -----------------------------------
 # Тех. эндпоинты
