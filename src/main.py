@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import Response
 import base64
 import time
 import logging
@@ -85,6 +86,11 @@ async def analyze_photo(image: UploadFile = File(None)):
         raise HTTPException(422, f"Analysis error: {str(e)}")
 
 
+@app.head("/recognize")
+async def recognize_head():
+    return Response(status_code=204)
+
+
 @app.post("/recognize")
 async def recognize_food(image: UploadFile = File(None)):
     """
@@ -105,7 +111,7 @@ async def recognize_food(image: UploadFile = File(None)):
 
     try:
         # Save uploaded image temporarily
-        temp_input = f"/tmp/preprocess/input_{time.time()}.jpg"
+        temp_input = f"/tmp/input_{time.time()}.jpg"
         logging.info(f"Saving temp file: {temp_input}")
         content = await image.read()
         logging.info(f"Image content length: {len(content)} bytes")
@@ -149,7 +155,7 @@ async def recognize_food(image: UploadFile = File(None)):
     finally:
         # Cleanup temp files
         for path in [temp_input, processed_path if 'processed_path' in locals() else None]:
-            if path and os.path.exists(path):
+            if path and path.startswith("/tmp/") and os.path.exists(path):
                 try:
                     os.remove(path)
                     logging.info(f"Cleaned up temp file: {path}")

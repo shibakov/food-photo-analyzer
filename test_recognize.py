@@ -4,8 +4,8 @@ import requests
 
 
 def test_recognize():
-    url = "http://localhost:8080/recognize"
-    files = {'image': open('test_photo.jpg', 'rb')}
+    url = "http://localhost:8000/recognize"
+    files = {'image': ('test_photo.jpg', open('test_photo.jpg', 'rb'), 'image/jpeg')}
 
     response = requests.post(url, files=files)
     print(f"Status: {response.status_code}")
