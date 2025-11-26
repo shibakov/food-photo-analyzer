@@ -1,60 +1,69 @@
-"""Main FastAPI application (updated CORS)."""
+"""Main FastAPI application."""
+
+import base64
+import logging
+import os
+import time
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import Response
-import base64
-import time
-import logging
-import os
 
 from src.services import analyze_image_with_vision, refine_products
 from src.image_preprocess import preprocess_image
 from src.gpt_vision import analyze_food
 
-# Initialize FastAPI app
-app = FastAPI()
+# -----------------------------------
+# Инициализация приложения
+# -----------------------------------
 
-# Configure logging
+app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-# --- CORS configuration ---
-# During development and production, specify allowed origins explicitly.
-# Wildcards are not permitted when allow_credentials is True, so here we set
-# allow_credentials to False and list concrete origins. Adjust this list based
-# on your deployment domains.
+# -----------------------------------
+# CORS
+# -----------------------------------
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://my-miniapp-production.up.railway.app",
-        "https://food-photo-analyzer-production.up.railway.app",
+        # локальный фронт
         "http://localhost:5173",
+        # прод-миниапп
+        "https://my-miniapp-production.up.railway.app",
+        # телега (на будущее)
+        "https://web.telegram.org",
+        "https://app.telegram.org",
+        "https://t.me",
     ],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
+# Если хочешь, можно вообще открыть для всех:
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],
+#     allow_credentials=False,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
-# Provide an OPTIONS handler to satisfy CORS preflight requests for any path.
-@app.options("/{path:path}")
-async def preflight_handler(path: str):
-    return {}
-
+# -----------------------------------
+# Тех. эндпоинты
+# -----------------------------------
 
 @app.get("/health")
 def health():
-    """Health endpoint to check service status."""
     return {"status": "ok"}
 
 
+# -----------------------------------
+# /analyze — старый пайплайн
+# -----------------------------------
+
 @app.post("/analyze")
 async def analyze_photo(image: UploadFile = File(None)):
-    """
-    Full analysis endpoint. Performs computer vision recognition and then
-    refinement of detected products.
-    """
     if not image:
         raise HTTPException(422, "Image field is required")
 
@@ -69,7 +78,7 @@ async def analyze_photo(image: UploadFile = File(None)):
     try:
         # STEP 1 — VISION RECOGNITION
         vision_json = analyze_image_with_vision(img_b64, image.content_type)
-        products = vision_json.get("products", [])
+        products = vision_json["products"]
 
         # STEP 2 — REFINEMENT
         refine_json = refine_products(products)
@@ -84,59 +93,46 @@ async def analyze_photo(image: UploadFile = File(None)):
         raise HTTPException(422, f"Analysis error: {str(e)}")
 
 
-@app.head("/recognize")
-async def recognize_head():
-    return Response(status_code=204)
-
+# -----------------------------------
+# /recognize — новый быстрый пайплайн
+# -----------------------------------
 
 @app.post("/recognize")
 async def recognize_food(image: UploadFile = File(None)):
     """
-    Optimized endpoint: preprocess → single GPT-4o vision call.
+    Optimized endpoint: preprocess → single GPT-4o-mini vision call.
     """
-    logging.info(f"Starting /recognize request, content_type: {image.content_type if image else None}")
-
     if not image:
-        logging.error("No image provided in request")
         raise HTTPException(422, "Image field is required")
 
     if image.content_type not in ["image/jpeg", "image/png"]:
-        logging.error(f"Unsupported content_type: {image.content_type}")
         raise HTTPException(422, "Unsupported format (use jpeg/png)")
 
     total_start = time.time()
-    temp_input = None
 
     try:
-        # Save uploaded image temporarily
-        temp_input = f"/tmp/input_{time.time()}.jpg"
-        logging.info(f"Saving temp file: {temp_input}")
-        os.makedirs(os.path.dirname(temp_input), exist_ok=True)
-        content = await image.read()
-        logging.info(f"Image content length: {len(content)} bytes")
+        # Готовим временную папку
+        tmp_dir = "/tmp/preprocess"
+        os.makedirs(tmp_dir, exist_ok=True)
 
-        with open(temp_input, 'wb') as f:
+        temp_input = os.path.join(tmp_dir, f"input_{time.time()}.jpg")
+
+        # Сохраняем файл
+        content = await image.read()
+        with open(temp_input, "wb") as f:
             f.write(content)
 
-        # Preprocess image
-        logging.info("Starting image preprocessing")
+        # Препроцесс
         preprocess_start = time.time()
         processed_path = preprocess_image(temp_input)
         preprocess_time = time.time() - preprocess_start
-        logging.info(f"Preprocessing completed in {preprocess_time:.2f}s, output: {processed_path}")
 
-        # Check if processed file exists
-        if not os.path.exists(processed_path):
-            raise ValueError(f"Processed file not found: {processed_path}")
-
-        # GPT analysis
-        logging.info("Starting GPT analysis")
+        # GPT-анализ
         gpt_start = time.time()
         result_json = analyze_food(processed_path)
         gpt_time = time.time() - gpt_start
-        logging.info(f"GPT analysis completed in {gpt_time:.2f}s with {len(result_json.get('products', []))} products")
 
-        # Add timing info
+        # Тайминги
         total_time = time.time() - total_start
         result_json["processing_times"] = {
             "preprocessing_ms": round(preprocess_time * 1000, 2),
@@ -144,19 +140,14 @@ async def recognize_food(image: UploadFile = File(None)):
             "total_ms": round(total_time * 1000, 2),
         }
 
-        logging.info(f"Recognize completed successfully in {total_time:.2f}s")
+        # Чистим временный файл
+        try:
+            os.remove(temp_input)
+        except Exception:
+            pass
+
         return result_json
 
     except Exception as e:
-        logging.exception(f"Error in /recognize: {str(e)}")
-        logging.error(f"Total time before error: {time.time() - total_start:.2f}s")
+        logging.exception("Error in /recognize")
         raise HTTPException(422, f"Recognition error: {str(e)}")
-    finally:
-        # Cleanup temp files
-        for path in [temp_input, processed_path if 'processed_path' in locals() else None]:
-            if path and path.startswith("/tmp/") and os.path.exists(path):
-                try:
-                    os.remove(path)
-                    logging.info(f"Cleaned up temp file: {path}")
-                except Exception as cleanup_error:
-                    logging.warning(f"Failed to cleanup {path}: {cleanup_error}")

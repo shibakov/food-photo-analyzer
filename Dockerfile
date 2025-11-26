@@ -13,7 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Railway sets PORT automatically
+# Railway сам проставляет PORT, но можно задать дефолт
 ENV PORT=8080
 
+# ВАЖНО: НИКАКОГО ENTRYPOINT, порт берём из $PORT
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]
