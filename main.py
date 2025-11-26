@@ -51,15 +51,15 @@ def extract_json(text: str):
 # ---------- PROMPTS ----------------------
 
 VISION_PROMPT = """
-Ты — эксперт по анализу еды по фото.
+You are a food analysis expert by photo.
 
-1) Определи ВСЕ ингредиенты (даже мелкие: соус, сыр, листья салата).
-2) Если на фото есть РУКА — используй её как масштаб.
-   - Средняя ширина ладони ≈ 9.5 см.
-   - Калибруй вес точнее.
-3) Если руки нет — оценивай по стандартным размерам.
+1) Identify ALL ingredients (even small ones: sauce, cheese, lettuce leaves).
+2) If there is a HAND in the photo — use it as a scale.
+   - Average hand width ≈ 9.5 cm.
+   - Calibrate weight more accurately.
+3) If no hand — estimate based on standard sizes.
 
-Верни ЧИСТЫЙ JSON строго в таком виде:
+Return CLEAN JSON strictly in this format:
 
 {
   "products": [
@@ -70,16 +70,16 @@ VISION_PROMPT = """
   }
 }
 
-⚠️ Без текста, без markdown, без комментариев.
+⚠️ No text, no markdown, no comments.
 """
 
 REFINE_PROMPT = """
-Ты — нутрициолог. Уточни веса и посчитай КБЖУ.
+You are a nutritionist. Refine weights and calculate nutrition facts (kcal, protein, fat, carbs).
 
-Вход — список продуктов:
+Input — list of products:
 {products_list}
 
-Верни JSON строго в формате:
+Return JSON strictly in this format:
 
 {
   "products": [
@@ -93,7 +93,7 @@ REFINE_PROMPT = """
   }
 }
 
-⚠️ Никакого текста вне JSON.
+⚠️ No text outside JSON.
 """
 
 
@@ -108,43 +108,57 @@ async def analyze_photo(image: UploadFile = File(...)):
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
     # ====== STEP 1 — VISION RECOGNITION ======
-    vision = client.chat.completions.create(
-        model="gpt-4o",
-        temperature=0,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": VISION_PROMPT},
-                    {"type": "image_url", "image_url": {"url": f"data:{image.content_type};base64,{img_b64}"}}
-                ]
-            }
-        ]
-    )
+    try:
+        vision = client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": VISION_PROMPT},
+                        {"type": "image_url", "image_url": {"url": f"data:{image.content_type};base64,{img_b64}"}}
+                    ]
+                }
+            ]
+        )
+    except Exception as e:
+        return {"error": "vision_api_error", "details": str(e)}
 
     try:
         vision_json = extract_json(vision.choices[0].message.content)
     except Exception as e:
         return {"error": "vision_json_parse_error", "details": str(e)}
 
+    # Check required keys
+    if "products" not in vision_json:
+        return {"error": "vision_no_products", "details": "No products in vision response"}
+
     # ====== STEP 2 — REFINEMENT (weights + macros) ======
     products_list = json.dumps(vision_json["products"], ensure_ascii=False)
 
-    refine = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        messages=[
-            {
-                "role": "user",
-                "content": REFINE_PROMPT.replace("{products_list}", products_list)
-            }
-        ]
-    )
+    try:
+        refine = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            messages=[
+                {
+                    "role": "user",
+                    "content": REFINE_PROMPT.replace("{products_list}", products_list)
+                }
+            ]
+        )
+    except Exception as e:
+        return {"error": "refine_api_error", "details": str(e)}
 
     try:
         refine_json = extract_json(refine.choices[0].message.content)
     except Exception as e:
         return {"error": "refine_json_parse_error", "details": str(e)}
+
+    # Check required keys
+    if "products" not in refine_json or "totals" not in refine_json:
+        return {"error": "refine_invalid_response", "details": "Missing products or totals"}
 
     # ====== DONE ======
     return refine_json
