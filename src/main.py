@@ -26,11 +26,9 @@ logging.basicConfig(level=logging.INFO)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",
-        "https://web.telegram.org",
-        "https://t.me",
         "https://my-miniapp-production.up.railway.app",
         "https://food-photo-analyzer-production.up.railway.app",
+        "http://localhost:5173",
     ],
     allow_credentials=False,
     allow_methods=["*"],
@@ -113,6 +111,7 @@ async def recognize_food(image: UploadFile = File(None)):
         # Save uploaded image temporarily
         temp_input = f"/tmp/input_{time.time()}.jpg"
         logging.info(f"Saving temp file: {temp_input}")
+        os.makedirs(os.path.dirname(temp_input), exist_ok=True)
         content = await image.read()
         logging.info(f"Image content length: {len(content)} bytes")
 
