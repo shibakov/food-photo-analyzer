@@ -18,7 +18,19 @@ from src.gpt_vision import analyze_food
 # -----------------------------------
 
 app = FastAPI()
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logging.basicConfig(
+    level=logging.DEBUG,
+    stream=sys.stdout,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+
+@app.middleware("http")
+async def catch_exceptions_middleware(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        logging.exception(f"🔥🔥🔥 Unhandled server error: {e}")
+        raise
 
 # -----------------------------------
 # CORS
@@ -109,6 +121,8 @@ async def recognize_food(image: UploadFile = File(None)):
     """
     Optimized endpoint: preprocess → single GPT-4o-mini vision call.
     """
+    logging.debug("📸 /recognize called — starting pipeline")
+
     if not image:
         raise HTTPException(422, "Image field is required")
 

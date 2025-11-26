@@ -11,6 +11,7 @@ from src.prompts import SYSTEM_PROMPT
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+
 def analyze_food(image_path: str) -> Dict[str, Any]:
     """
     Analyze food photo with GPT-4o using single vision call.
@@ -25,15 +26,22 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
 
         b64_img = base64.b64encode(img_data).decode('utf-8')
 
+        prompt_text = (
+            "Проанализируй фото и верни JSON строго по структуре:\n\n"
+            '{\n  "products": [\n    {\n      "product_name": "",\n'
+            '      "quantity_g": 0,\n      "kcal": 0,\n      "protein": 0,\n'
+            '      "fat": 0,\n      "carbs": 0\n    }\n  ],\n'
+            '  "totals": {\n    "kcal": 0,\n    "protein": 0,\n'
+            '    "fat": 0,\n    "carbs": 0\n  }\n}\n\n'
+            "Не добавляй никакого текста кроме JSON."
+        )
+
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": "Проанализируй фото и верни JSON строго по структуре:\n\n{\n  \"products\": [\n    {\n      \"product_name\": \"\",\n      \"quantity_g\": 0,\n      \"kcal\": 0,\n      \"protein\": 0,\n      \"fat\": 0,\n      \"carbs\": 0\n    }\n  ],\n  \"totals\": {\n    \"kcal\": 0,\n    \"protein\": 0,\n    \"fat\": 0,\n    \"carbs\": 0\n  }\n}\n\nНе добавляй никакого текста кроме JSON."
-                    },
+                    {"type": "text", "text": prompt_text},
                     {
                         "type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{b64_img}"}
