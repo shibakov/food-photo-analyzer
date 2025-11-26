@@ -1,11 +1,21 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from openai import OpenAI
+from fastapi.middleware.cors import CORSMiddleware
 import base64
 import os
 import json
 import re
 
 app = FastAPI()
+
+# Add CORS middleware to handle preflight OPTIONS requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Adjust origins as needed for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @app.get("/health")
@@ -88,7 +98,7 @@ REFINE_PROMPT = """
 
 # ---------- Main endpoint -----------------
 
-@app.post("/analyze_photo")
+@app.post("/analyze")
 async def analyze_photo(image: UploadFile = File(...)):
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(400, "Unsupported format (use jpeg/png)")
