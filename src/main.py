@@ -69,7 +69,7 @@ async def analyze_photo(image: UploadFile = File(None)):
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(422, "Unsupported format (use jpeg/png)")
 
-    start_time = time.time()
+    total_start = time.time()
     logging.info(f"[PIPELINE] Starting /analyze endpoint for file: {image.filename}")
 
     img_bytes = await image.read()
@@ -77,20 +77,33 @@ async def analyze_photo(image: UploadFile = File(None)):
 
     try:
         # STEP 1 — VISION RECOGNITION
+        vision_start = time.time()
         logging.info("[PIPELINE] Step 1: Starting vision recognition")
         vision_json = analyze_image_with_vision(img_b64, image.content_type)
         products = vision_json["products"]
-        logging.info(f"[PIPELINE] Step 1: Vision completed, found {len(products)} products")
+        vision_time = time.time() - vision_start
+        logging.info(f"[PIPELINE] Step 1: Vision completed in {round(vision_time * 1000, 2)}ms, found {len(products)} products")
 
         # STEP 2 — REFINEMENT
+        refine_start = time.time()
         logging.info("[PIPELINE] Step 2: Starting refinement")
         refine_json = refine_products(products)
-        logging.info("[PIPELINE] Step 2: Refinement completed")
+        refine_time = time.time() - refine_start
+        logging.info(f"[PIPELINE] Step 2: Refinement completed in {round(refine_time * 1000, 2)}ms")
 
-        # Add processing time
-        end_time = time.time()
-        refine_json["processing_time_ms"] = round((end_time - start_time) * 1000, 2)
-        logging.info(f"[PIPELINE] /analyze completed successfully, time: {refine_json['processing_time_ms']}ms")
+        # Total timing
+        total_time = time.time() - total_start
+        processing_times = {
+            "vision_ms": round(vision_time * 1000, 2),
+            "refine_ms": round(refine_time * 1000, 2),
+            "total_ms": round(total_time * 1000, 2),
+        }
+
+        # Для обратной совместимости сохраняем старое поле как total_ms
+        refine_json["processing_time_ms"] = processing_times["total_ms"]
+        refine_json["processing_times"] = processing_times
+
+        logging.info(f"[PIPELINE] /analyze completed successfully, total time: {processing_times['total_ms']}ms")
 
         return refine_json
     except Exception as e:
