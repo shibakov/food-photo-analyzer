@@ -18,21 +18,21 @@ app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
 # --- CORS: максимально разрешённый вариант для отладки фронта ---
-+ app.add_middleware(
-+     CORSMiddleware,
-+     allow_origins=[
-+         "http://localhost:5173",
-+         "https://web.telegram.org",
-+         "https://*.web.telegram.org",
-+         "https://t.me",
+app.add_middleware(
+     CORSMiddleware,
+     allow_origins=[
+         "http://localhost:5173",
+         "https://web.telegram.org",
+         "https://*.web.telegram.org",
+         "https://t.me",
           "my-miniapp-production.up.railway.app",
-+         "https://food-photo-analyzer-production.up.railway.app"
-+     ],
-+     allow_credentials=True,
-+     allow_methods=["*"],
-+     allow_headers=["*"],
-+     expose_headers=["*"],
-+ )
+         "https://food-photo-analyzer-production.up.railway.app"
+     ],
+     allow_credentials=True,
+     allow_methods=["*"],
+     allow_headers=["*"],
+     expose_headers=["*"],
+)
 
 @app.options("/{path:path}")
 async def preflight_handler(path: str):
