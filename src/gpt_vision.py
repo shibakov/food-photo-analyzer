@@ -16,6 +16,53 @@ def _client():
     return get_openai_client()
 
 
+def _parse_json_from_text(text: str) -> Dict[str, Any]:
+    """
+    Try several strategies to extract JSON from model text output.
+    Raises ValueError if nothing valid is found.
+    """
+    if not text:
+        raise ValueError("Empty response from model")
+
+    # 1) Прямая попытка распарсить как JSON целиком
+    try:
+        parsed = json.loads(text.strip())
+        return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # 2) Убрать ```...``` и снова попытаться
+    cleaned = re.sub(r"```.*?```", "", text, flags=re.DOTALL).strip()
+    try:
+        parsed = json.loads(cleaned)
+        return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # 3) Вырезать первый JSON-блок по { ... }
+    start_idx = cleaned.find("{")
+    end_idx = cleaned.rfind("}") + 1
+    if start_idx != -1 and end_idx > start_idx:
+        snippet = cleaned[start_idx:end_idx]
+        try:
+            parsed = json.loads(snippet)
+            return parsed
+        except json.JSONDecodeError:
+            pass
+
+    # 4) Регекс по всему тексту
+    json_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if json_match:
+        snippet = json_match.group(0)
+        try:
+            parsed = json.loads(snippet)
+            return parsed
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError("No valid JSON found in model response")
+
+
 def analyze_food(image_path: str) -> Dict[str, Any]:
     """
     Analyze food photo with GPT-4o using single vision call.
@@ -45,7 +92,10 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt_text},
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_img}"}}  # type: ignore
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64_img}"},
+                    },
                 ],
             },
         ]
@@ -62,42 +112,10 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
         result_text = response.choices[0].message.content or ""
         logger.info("GPT response received, length: %s", len(result_text))
 
-        # First try: direct JSON load
-        try:
-            parsed = json.loads(result_text.strip())
-            logger.info("Direct JSON parse success with %s products", len(parsed.get("products", [])))
-            return parsed
-        except json.JSONDecodeError:
-            logger.warning("Direct JSON parse failed, trying extraction")
+        parsed = _parse_json_from_text(result_text)
+        logger.info("Parsed JSON with %s products", len(parsed.get("products", [])))
+        return parsed
 
-        # Fallback: extract JSON from text
-        clean = re.sub(r"```.*?```", "", result_text, flags=re.DOTALL).strip()
-        start_idx = clean.find("{")
-        end_idx = clean.rfind("}") + 1
-
-        if start_idx == -1 or end_idx <= start_idx:
-            # Try regex fallback for malformed JSON
-            json_match = re.search(r'\{.*\}', clean, re.DOTALL)
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group(0))
-                    logger.info("Regex extract JSON success with %s products", len(parsed.get("products", [])))
-                    return parsed
-                except json.JSONDecodeError:
-                    pass
-            raise ValueError("No valid JSON found in response")
-
-        try:
-            parsed = json.loads(clean[start_idx:end_idx])
-            logger.info("Extract JSON success with %s products", len(parsed.get("products", [])))
-            return parsed
-        except json.JSONDecodeError:
-            # Final fallback: regex on full text
-            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group(0))
-                    logger.info("Final regex JSON success with %s products", len(parsed.get("products", [])))
-                    return parsed
-                except:
-                    pass
+    except Exception as e:
+        logger.error("Food analysis failed: %s", e)
+        raise
