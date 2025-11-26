@@ -145,11 +145,16 @@ async def recognize_food(image: UploadFile = File(None)):
         logging.info(f"[PIPELINE] Saved input image: {temp_input}")
 
         # Препроцесс
-        preprocess_start = time.time()
         logging.info("[PIPELINE] Step 1: Starting image preprocessing")
-        processed_path = preprocess_image(temp_input)
-        preprocess_time = time.time() - preprocess_start
-        logging.info(f"[PIPELINE] Step 1: Preprocessing completed in {round(preprocess_time * 1000, 2)}ms")
+        processed_path, preprocess_timings = preprocess_image(temp_input)
+        logging.info(
+            "[PIPELINE] Step 1: Preprocessing completed in %sms (resize=%sms, crop=%sms, remove_bg=%sms, final_resize=%sms)",
+            preprocess_timings.get("total_ms"),
+            preprocess_timings.get("resize_ms"),
+            preprocess_timings.get("crop_ms"),
+            preprocess_timings.get("remove_bg_ms"),
+            preprocess_timings.get("final_resize_ms"),
+        )
 
         # GPT-анализ
         gpt_start = time.time()
@@ -161,9 +166,10 @@ async def recognize_food(image: UploadFile = File(None)):
         # Тайминги
         total_time = time.time() - total_start
         result_json["processing_times"] = {
-            "preprocessing_ms": round(preprocess_time * 1000, 2),
+            "preprocessing_ms": preprocess_timings.get("total_ms"),
             "gpt_ms": round(gpt_time * 1000, 2),
             "total_ms": round(total_time * 1000, 2),
+            "preprocess_breakdown": preprocess_timings,
         }
 
         logging.info(f"[PIPELINE] /recognize completed successfully, total time: {round(total_time * 1000, 2)}ms")
