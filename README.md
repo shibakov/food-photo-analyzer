@@ -68,20 +68,29 @@ print(response.json())
     {
       "product_name": "burger bun",
       "quantity_g": 80,
-      "confidence": 0.95
+      "confidence": 0.9,
+      "kcal": 218,
+      "protein": 7.2,
+      "fat": 3.2,
+      "carbs": 36.0
     },
     {
       "product_name": "lettuce",
       "quantity_g": 15,
-      "confidence": 0.9
+      "confidence": 0.85,
+      "kcal": 2.25,
+      "protein": 0.2,
+      "fat": 0.05,
+      "carbs": 0.4
     }
   ],
   "totals": {
-    "kcal": 485,
-    "protein": 34,
-    "fat": 28,
-    "carbs": 30
-  }
+    "kcal": 550.25,
+    "protein": 37.4,
+    "fat": 29.7,
+    "carbs": 37.4
+  },
+  "processing_time_ms": 14197.35
 }
 ```
 

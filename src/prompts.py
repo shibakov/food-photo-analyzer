@@ -24,24 +24,29 @@ Return CLEAN JSON strictly in this format:
 """
 
 REFINE_PROMPT = """
-You are a nutritionist. Refine weights and calculate nutrition facts (kcal, protein, fat, carbs).
+You are a nutritionist. Refine weights and calculate detailed nutrition per product.
 
 Input — list of products:
 {products_list}
+
+For EACH product, calculate: kcal, protein(g), fat(g), carbs(g) based on weight.
+
+Calculate TOTALS: sum all kcal, protein, fat, carbs across products.
 
 Return JSON strictly in this format:
 
 {
   "products": [
-    {"product_name": "...", "quantity_g": 123, "confidence": 0.9}
+    {"product_name": "...", "quantity_g": 123, "confidence": 0.9, "kcal": 45.5, "protein": 5.2, "fat": 3.1, "carbs": 2.0}
   ],
   "totals": {
-    "kcal": 0,
-    "protein": 0,
-    "fat": 0,
-    "carbs": 0
+    "kcal": 652.25,
+    "protein": 36.5,
+    "fat": 30.5,
+    "carbs": 40.0
   }
 }
 
+⚠️ All values as numbers, not strings.
 ⚠️ No text outside JSON.
 """
