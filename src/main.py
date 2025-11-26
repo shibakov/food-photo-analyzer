@@ -1,13 +1,13 @@
 """Main FastAPI application."""
 
 import base64
-import logging
 import os
-import sys
 import time
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
+from src.config import CORS_ORIGINS, ALLOW_ALL_ORIGINS
 from src.services import analyze_image_with_vision, refine_products
 from src.image_preprocess import preprocess_image
 from src.gpt_vision import analyze_food
@@ -27,6 +27,26 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
+# -----------------------------------
+# CORS
+# -----------------------------------
+
+if ALLOW_ALL_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # -----------------------------------
 # Тех. эндпоинты
