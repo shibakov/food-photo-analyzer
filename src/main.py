@@ -10,6 +10,7 @@ from src.services import analyze_image_with_vision, refine_products
 from src.image_preprocess import ImagePreprocessor
 from src.gpt_vision import analyze_food
 import os
+from src.config import CORS_ORIGINS
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -20,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 # Add CORS middleware to handle preflight OPTIONS requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust origins as needed for production
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
