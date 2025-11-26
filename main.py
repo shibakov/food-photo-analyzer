@@ -1,7 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
-import base64
 import os
 from openai import OpenAI
 import json
@@ -30,18 +29,28 @@ class AnalyzeResponse(BaseModel):
 async def analyze_photo(
     image: UploadFile = File(...),
     user_id: Optional[str] = Form(None),
-    meal_type: Optional[str] = Form(None),  # Breakfast / Lunch / etc
+    meal_type: Optional[str] = Form(None),
 ):
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Unsupported image format")
 
     # читаем файл в память
     image_bytes = await image.read()
-    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-    # вызываем GPT Vision (модель назови ту, что используешь — 4.1/4o/5)
+    if len(image_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    # 🔥 1) Загружаем файл в OpenAI (единственный поддерживаемый Vision-путь)
+    uploaded = client.files.create(
+        file=image_bytes,
+        purpose="vision"
+    )
+    file_id = uploaded.id
+
+    # 🔥 2) Формируем промт
     prompt = build_prompt(user_id=user_id, meal_type=meal_type)
 
+    # 🔥 3) Делаем Vision запрос с file_id
     completion = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -54,11 +63,7 @@ async def analyze_photo(
                 "content": [
                     {
                         "type": "file",
-                        "file": {
-                            "name": image.filename,
-                            "mime_type": image.content_type,
-                            "data": image_bytes
-                        }
+                        "file_id": file_id
                     },
                     {
                         "type": "text",
@@ -70,13 +75,16 @@ async def analyze_photo(
         temperature=0.2,
     )
 
-
-
-
-
     raw = completion.choices[0].message.content
-    # здесь нужно распарсить JSON из raw
+
+    # 🔥 4) Парсим JSON
     products, totals = parse_model_output(raw)
+
+    # 🔥 5) (опционально) удаляем файл из OpenAI
+    try:
+        client.files.delete(file_id)
+    except:
+        pass  # неважно, пусть живёт
 
     return AnalyzeResponse(
         products=products,
@@ -86,20 +94,20 @@ async def analyze_photo(
         total_carbs=totals.get("carbs"),
     )
 
+
 def build_prompt(user_id: Optional[str], meal_type: Optional[str]) -> str:
     return f"""
 Распознай еду на фото.
 
 Требования:
-- Определи все видимые компоненты блюда (даже если это салат, рагу или набор продуктов).
+- Определи все видимые компоненты блюда.
 - Для каждого компонента определи:
-  - краткое название продукта на русском
-  - примерный вес в граммах (целое число)
-  - уверенность от 0 до 1
-- Точность по составу и весу — около 80–90%. Лучше дай приблизительную оценку, чем пропусти компонент.
-- Если сомневаешься между похожими продуктами, выбери самый типичный вариант для домашней еды.
+  - название продукта на русском
+  - примерный вес (целое число граммов)
+  - уверенность (0–1)
+- Верни точный JSON.
 
-Верни строгий JSON такого вида:
+Пример формата:
 
 {{
   "products": [
@@ -117,14 +125,14 @@ def build_prompt(user_id: Optional[str], meal_type: Optional[str]) -> str:
   }}
 }}
 
-Не добавляй никаких пояснений, комментариев или текста вне JSON.
+Не добавляй ничего вне JSON.
 """
+
 
 def parse_model_output(raw: str):
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        # можно попробовать вычистить мусор/обрезать до фигурных скобок, но на MVP просто бросаем ошибку
         raise ValueError("Model returned non-JSON response")
 
     products = [
