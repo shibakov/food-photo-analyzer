@@ -1,4 +1,4 @@
-"""Image preprocessing service for food recognition."""
+"""Image preprocessing functions for food photo analysis."""
 
 import os
 import cv2
@@ -9,137 +9,63 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class ImagePreprocessor:
-    """Handles image preprocessing: resize, crop to plate, remove background."""
 
-    def __init__(self, temp_dir='/tmp/preprocess'):
-        self.temp_dir = temp_dir
-        os.makedirs(temp_dir, exist_ok=True)
+def resize_image(input_path, output_path, max_side=800):
+    """Resize image to fit within max_side x max_side, keeping aspect ratio."""
+    img = Image.open(input_path)
+    img.thumbnail((max_side, max_side))
+    img.save(output_path, format="PNG")
 
-    def preprocess_image(self, image_path: str) -> str:
-        """
-        Full preprocessing pipeline: resize -> crop -> remove bg.
-        Returns path to final PNG file.
-        """
-        logger.info(f"Starting preprocessing for {image_path}")
-        start_time = cv2.getTickCount()
 
-        try:
-            # Save PIL image to temp
-            with Image.open(image_path) as img:
-                temp_path = os.path.join(self.temp_dir, 'original.png')
-                img.save(temp_path, 'PNG')
+def crop_to_plate(input_path, output_path):
+    """Crop to circular plate using HoughCircles. Returns True if cropped, False if not."""
+    img = cv2.imread(input_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.medianBlur(gray, 5)
 
-            # Resize
-            resized_path = self._resize_image(temp_path, max_size=800)
-            if not resized_path:
-                raise ValueError("Resize failed")
+    circles = cv2.HoughCircles(
+        gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=200,
+        param1=100, param2=30, minRadius=80, maxRadius=600
+    )
 
-            # Skip crop for now
-            cropped_path = resized_path
+    if circles is None:
+        return False
 
-            # Remove background
-            final_path = self._remove_background(cropped_path)
-            if not final_path:
-                raise ValueError("Background removal failed")
+    circles = np.uint16(np.around(circles))
+    x, y, r = circles[0][0]
+    crop = img[y-r:y+r, x-r:x+r]
+    cv2.imwrite(output_path, crop)
+    return True
 
-            total_time = (cv2.getTickCount() - start_time) / cv2.getTickFrequency()
-            logger.info(f"Preprocessing completed in {total_time:.2f}s")
 
-            return final_path
+def remove_background(input_path, output_path):
+    """Remove background using rembg."""
+    with open(input_path, "rb") as i:
+        with open(output_path, "wb") as o:
+            o.write(remove(i.read()))
+    return output_path
 
-        except Exception as e:
-            logger.error(f"Preprocessing failed: {str(e)}")
-            raise
 
-    def _resize_image(self, input_path: str, max_size: int = 800) -> str:
-        """Resize image, keeping aspect ratio, longest side = max_size."""
-        output_path = os.path.join(self.temp_dir, 'resized.png')
+def preprocess_image(path):
+    """Full preprocessing pipeline: resize -> crop -> remove_bg -> final resize."""
+    import os
 
-        try:
-            with Image.open(input_path) as img:
-                width, height = img.size
-                if width > height:
-                    new_width = max_size
-                    new_height = int(height * (max_size / width))
-                else:
-                    new_height = max_size
-                    new_width = int(width * (max_size / height))
+    base = "/tmp/preprocess"
+    os.makedirs(base, exist_ok=True)
 
-                resized = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                resized.save(output_path, 'PNG')
+    resized = f"{base}/resized.png"
+    cropped = f"{base}/cropped.png"
+    no_bg = f"{base}/no_bg.png"
+    final = f"{base}/final.png"
 
-            logger.debug(".2f")
-            return output_path
+    resize_image(path, resized)
 
-        except Exception as e:
-            logger.error(f"Resize failed: {str(e)}")
-            return None
+    cropped_ok = crop_to_plate(resized, cropped)
+    to_bg = cropped if cropped_ok else resized
 
-    def _crop_to_plate(self, input_path: str) -> str:
-        """Crop to circular plate using HoughCircles. Returns cropped PNG path or None if failed."""
-        output_path = os.path.join(self.temp_dir, 'cropped.png')
+    remove_background(to_bg, no_bg)
 
-        try:
-            img = cv2.imread(input_path)
-            if img is None:
-                logger.error("Cannot read image for cropping")
-                return None
+    # финальный ресайз
+    resize_image(no_bg, final)
 
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            gray = cv2.medianBlur(gray, 5)
-
-            circles = cv2.HoughCircles(
-                gray,
-                cv2.HOUGH_GRADIENT,
-                dp=1.2,
-                minDist=100,
-                param1=50,
-                param2=30,
-                minRadius=50,
-                maxRadius=250
-            )
-
-            if circles is not None:
-                circles = np.uint16(np.around(circles))
-                # Take the largest circle (usually the plate)
-                circle = max(circles[0], key=lambda c: c[2])
-
-                x, y, r = circle
-                # Crop square around circle
-                crop_size = r * 2
-                x1 = max(0, x - r)
-                y1 = max(0, y - r)
-                x2 = min(img.shape[1], x + r)
-                y2 = min(img.shape[0], y + r)
-
-                cropped = img[y1:y2, x1:x2]
-                cv2.imwrite(output_path, cropped)
-
-                logger.debug(".1f")
-                return output_path
-
-            return None  # No plate detected
-
-        except Exception as e:
-            logger.error(f"Crop failed: {str(e)}")
-            return None
-
-    def _remove_background(self, input_path: str) -> str:
-        """Remove background using rembg, save PNG with alpha."""
-        output_path = os.path.join(self.temp_dir, 'no_bg.png')
-
-        try:
-            with open(input_path, 'rb') as f:
-                input_bytes = f.read()
-
-            output_bytes = remove(input_bytes)
-            with open(output_path, 'wb') as f:
-                f.write(output_bytes)
-
-            logger.debug("Background removal completed")
-            return output_path
-
-        except Exception as e:
-            logger.error(f"Background removal failed: {str(e)}")
-            return None
+    return final

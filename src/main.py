@@ -7,7 +7,7 @@ import time
 import logging
 
 from src.services import analyze_image_with_vision, refine_products
-from src.image_preprocess import ImagePreprocessor
+from src.image_preprocess import preprocess_image
 from src.gpt_vision import analyze_food
 import os
 from src.config import CORS_ORIGINS
@@ -81,15 +81,23 @@ async def recognize_food(image: UploadFile = File(None)):
         with open(temp_input, 'wb') as f:
             f.write(content)
 
-        # For now, skip preprocessing - call GPT directly on uploaded image
+        # Preprocess image
+        preprocess_start = time.time()
+        processed_path = preprocess_image(temp_input)
+        preprocess_time = time.time() - preprocess_start
+
+        # GPT analysis
         gpt_start = time.time()
-        result_json = analyze_food(temp_input)
+        result_json = analyze_food(processed_path)
         gpt_time = time.time() - gpt_start
 
         # Add timing info
         total_time = time.time() - total_start
-        result_json["processing_time_ms"] = round(total_time * 1000, 2)
-        result_json["gpt_analysis_time_ms"] = round(gpt_time * 1000, 2)
+        result_json["processing_times"] = {
+            "preprocessing_ms": round(preprocess_time * 1000, 2),
+            "gpt_ms": round(gpt_time * 1000, 2),
+            "total_ms": round(total_time * 1000, 2)
+        }
 
         # Cleanup temp file
         try:

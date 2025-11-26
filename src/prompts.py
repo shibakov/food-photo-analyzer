@@ -1,5 +1,13 @@
 """Prompts for OpenAI models."""
 
+SYSTEM_PROMPT = """
+Ты — эксперт по распознаванию еды и расчёту КБЖУ.
+Не объясняй ход рассуждений.
+Не используй Chain-of-Thought.
+Верни только JSON строго по структуре.
+Если не уверен — дай лучший реалистичный estimate.
+"""
+
 VISION_PROMPT = """
 You are a food analysis expert by photo.
 
