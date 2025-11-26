@@ -53,10 +53,11 @@ async def analyze_photo(
                 "role": "user",
                 "content": [
                     {
-                        "type": "image_url",
-                        "image_url": {
-                            # ВАЖНО: только raw base64, без data:image/...
-                            "url": image_b64
+                        "type": "file",
+                        "file": {
+                            "name": image.filename,
+                            "mime_type": image.content_type,
+                            "data": image_bytes
                         }
                     },
                     {
@@ -68,6 +69,7 @@ async def analyze_photo(
         ],
         temperature=0.2,
     )
+
 
 
 
