@@ -15,6 +15,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 def analyze_image_with_vision(img_b64: str, content_type: str) -> Dict[str, Any]:
     """Analyze image using vision model."""
+    print(f"[LOG] Analyzing image with content_type: {content_type}, b64 len: {len(img_b64)}")
     response = client.chat.completions.create(
         model="gpt-4o",
         temperature=0,
@@ -29,7 +30,9 @@ def analyze_image_with_vision(img_b64: str, content_type: str) -> Dict[str, Any]
         ]
     )
     vision_text = response.choices[0].message.content
+    print(f"[LOG] Vision raw response: {vision_text}")
     vision_json = extract_json(vision_text)
+    print(f"[LOG] Vision parsed JSON: {vision_json}")
 
     if "products" not in vision_json:
         raise ValueError("No products in vision response")
@@ -40,6 +43,7 @@ def analyze_image_with_vision(img_b64: str, content_type: str) -> Dict[str, Any]
 def refine_products(products: list) -> Dict[str, Any]:
     """Refine products with nutritionist model."""
     products_list = json.dumps(products, ensure_ascii=False)
+    print(f"[LOG] Refining products: {products_list}")
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
@@ -51,7 +55,9 @@ def refine_products(products: list) -> Dict[str, Any]:
         ]
     )
     refine_text = response.choices[0].message.content
+    print(f"[LOG] Refine raw response: {refine_text}")
     refine_json = extract_json(refine_text)
+    print(f"[LOG] Refine parsed JSON: {refine_json}")
 
     if "products" not in refine_json or "totals" not in refine_json:
         raise ValueError("Missing products or totals in refine response")

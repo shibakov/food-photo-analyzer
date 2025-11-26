@@ -27,10 +27,10 @@ def health():
 @app.post("/analyze")
 async def analyze_photo(image: UploadFile = File(None)):
     if not image:
-        raise HTTPException(400, "Image field is required")
+        raise HTTPException(422, "Image field is required")
 
     if image.content_type not in ["image/jpeg", "image/png"]:
-        raise HTTPException(400, "Unsupported format (use jpeg/png)")
+        raise HTTPException(422, "Unsupported format (use jpeg/png)")
 
     img_bytes = await image.read()
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
@@ -45,4 +45,4 @@ async def analyze_photo(image: UploadFile = File(None)):
 
         return refine_json
     except Exception as e:
-        return {"error": "analysis_error", "details": str(e)}
+        raise HTTPException(422, f"Analysis error: {str(e)}")
