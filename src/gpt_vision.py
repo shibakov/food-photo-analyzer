@@ -62,17 +62,42 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
         result_text = response.choices[0].message.content or ""
         logger.info("GPT response received, length: %s", len(result_text))
 
-        clean = re.sub(r"```.*?```", "", result_text, flags=re.DOTALL)
+        # First try: direct JSON load
+        try:
+            parsed = json.loads(result_text.strip())
+            logger.info("Direct JSON parse success with %s products", len(parsed.get("products", [])))
+            return parsed
+        except json.JSONDecodeError:
+            logger.warning("Direct JSON parse failed, trying extraction")
+
+        # Fallback: extract JSON from text
+        clean = re.sub(r"```.*?```", "", result_text, flags=re.DOTALL).strip()
         start_idx = clean.find("{")
         end_idx = clean.rfind("}") + 1
 
         if start_idx == -1 or end_idx <= start_idx:
-            raise ValueError("No JSON found in response")
+            # Try regex fallback for malformed JSON
+            json_match = re.search(r'\{.*\}', clean, re.DOTALL)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group(0))
+                    logger.info("Regex extract JSON success with %s products", len(parsed.get("products", [])))
+                    return parsed
+                except json.JSONDecodeError:
+                    pass
+            raise ValueError("No valid JSON found in response")
 
-        parsed = json.loads(clean[start_idx:end_idx])
-        logger.info("Successfully parsed JSON with %s products", len(parsed.get("products", [])))
-        return parsed
-
-    except Exception as e:
-        logger.error("Food analysis failed: %s", e)
-        raise
+        try:
+            parsed = json.loads(clean[start_idx:end_idx])
+            logger.info("Extract JSON success with %s products", len(parsed.get("products", [])))
+            return parsed
+        except json.JSONDecodeError:
+            # Final fallback: regex on full text
+            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group(0))
+                    logger.info("Final regex JSON success with %s products", len(parsed.get("products", [])))
+                    return parsed
+                except:
+                    pass
