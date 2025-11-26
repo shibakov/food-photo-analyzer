@@ -3,6 +3,7 @@
 import base64
 import logging
 import os
+import sys
 import time
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
@@ -17,7 +18,7 @@ from src.gpt_vision import analyze_food
 # -----------------------------------
 
 app = FastAPI()
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # -----------------------------------
 # CORS
@@ -71,21 +72,27 @@ async def analyze_photo(image: UploadFile = File(None)):
         raise HTTPException(422, "Unsupported format (use jpeg/png)")
 
     start_time = time.time()
+    logging.info(f"[PIPELINE] Starting /analyze endpoint for file: {image.filename}")
 
     img_bytes = await image.read()
     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
 
     try:
         # STEP 1 — VISION RECOGNITION
+        logging.info("[PIPELINE] Step 1: Starting vision recognition")
         vision_json = analyze_image_with_vision(img_b64, image.content_type)
         products = vision_json["products"]
+        logging.info(f"[PIPELINE] Step 1: Vision completed, found {len(products)} products")
 
         # STEP 2 — REFINEMENT
+        logging.info("[PIPELINE] Step 2: Starting refinement")
         refine_json = refine_products(products)
+        logging.info("[PIPELINE] Step 2: Refinement completed")
 
         # Add processing time
         end_time = time.time()
         refine_json["processing_time_ms"] = round((end_time - start_time) * 1000, 2)
+        logging.info(f"[PIPELINE] /analyze completed successfully, time: {refine_json['processing_time_ms']}ms")
 
         return refine_json
     except Exception as e:
@@ -109,6 +116,7 @@ async def recognize_food(image: UploadFile = File(None)):
         raise HTTPException(422, "Unsupported format (use jpeg/png)")
 
     total_start = time.time()
+    logging.info(f"[PIPELINE] Starting /recognize endpoint for file: {image.filename}")
 
     try:
         # Готовим временную папку
@@ -121,16 +129,21 @@ async def recognize_food(image: UploadFile = File(None)):
         content = await image.read()
         with open(temp_input, "wb") as f:
             f.write(content)
+        logging.info(f"[PIPELINE] Saved input image: {temp_input}")
 
         # Препроцесс
         preprocess_start = time.time()
+        logging.info("[PIPELINE] Step 1: Starting image preprocessing")
         processed_path = preprocess_image(temp_input)
         preprocess_time = time.time() - preprocess_start
+        logging.info(f"[PIPELINE] Step 1: Preprocessing completed in {round(preprocess_time * 1000, 2)}ms")
 
         # GPT-анализ
         gpt_start = time.time()
+        logging.info("[PIPELINE] Step 2: Starting GPT analysis")
         result_json = analyze_food(processed_path)
         gpt_time = time.time() - gpt_start
+        logging.info(f"[PIPELINE] Step 2: GPT analysis completed in {round(gpt_time * 1000, 2)}ms, found {len(result_json.get('products', []))} products")
 
         # Тайминги
         total_time = time.time() - total_start
@@ -139,6 +152,8 @@ async def recognize_food(image: UploadFile = File(None)):
             "gpt_ms": round(gpt_time * 1000, 2),
             "total_ms": round(total_time * 1000, 2),
         }
+
+        logging.info(f"[PIPELINE] /recognize completed successfully, total time: {round(total_time * 1000, 2)}ms")
 
         # Чистим временный файл
         try:
