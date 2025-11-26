@@ -25,6 +25,7 @@ class AnalyzeResponse(BaseModel):
     total_fat: Optional[float] = None
     total_carbs: Optional[float] = None
 
+
 @app.post("/analyze_photo", response_model=AnalyzeResponse)
 async def analyze_photo(
     image: UploadFile = File(...),
@@ -34,57 +35,27 @@ async def analyze_photo(
     if image.content_type not in ["image/jpeg", "image/png"]:
         raise HTTPException(status_code=400, detail="Unsupported image format")
 
-    # читаем файл в память
+    # читаем файл
     image_bytes = await image.read()
-
     if len(image_bytes) == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        raise HTTPException(status_code=400, detail="Empty file uploaded")
 
-    # 🔥 1) Загружаем файл в OpenAI (единственный поддерживаемый Vision-путь)
-    uploaded = client.files.create(
-        file=image_bytes,
-        purpose="vision"
-    )
-    file_id = uploaded.id
+    # prompt
+    prompt = build_prompt(user_id, meal_type)
 
-    # 🔥 2) Формируем промт
-    prompt = build_prompt(user_id=user_id, meal_type=meal_type)
-
-    # 🔥 3) Делаем Vision запрос с file_id
-    completion = client.chat.completions.create(
+    # 🔥 НОВЫЙ Vision вызов через Responses API (работает всегда)
+    response = client.responses.create(
         model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": "Ты — ассистент-нутрициолог, отвечай только JSON."
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "file",
-                        "file_id": file_id
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt
-                    }
-                ]
-            }
-        ],
-        temperature=0.2,
+        input=[
+            {"image": image_bytes},
+            {"text": prompt}
+        ]
     )
 
-    raw = completion.choices[0].message.content
+    raw = response.output_text
 
-    # 🔥 4) Парсим JSON
+    # парсим модель
     products, totals = parse_model_output(raw)
-
-    # 🔥 5) (опционально) удаляем файл из OpenAI
-    try:
-        client.files.delete(file_id)
-    except:
-        pass  # неважно, пусть живёт
 
     return AnalyzeResponse(
         products=products,
@@ -100,19 +71,13 @@ def build_prompt(user_id: Optional[str], meal_type: Optional[str]) -> str:
 Распознай еду на фото.
 
 Требования:
-- Определи все видимые компоненты блюда.
-- Для каждого компонента определи:
-  - название продукта на русском
-  - примерный вес (целое число граммов)
-  - уверенность (0–1)
-- Верни точный JSON.
-
-Пример формата:
+- Определи каждый компонент блюда.
+- Верни JSON строго в формате:
 
 {{
   "products": [
     {{
-      "product_name": "курица отварная",
+      "product_name": "...",
       "quantity_g": 150,
       "confidence": 0.87
     }}
@@ -125,15 +90,12 @@ def build_prompt(user_id: Optional[str], meal_type: Optional[str]) -> str:
   }}
 }}
 
-Не добавляй ничего вне JSON.
+Только JSON. Без текста.
 """
 
 
 def parse_model_output(raw: str):
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise ValueError("Model returned non-JSON response")
+    data = json.loads(raw)
 
     products = [
         ProductItem(
@@ -145,5 +107,4 @@ def parse_model_output(raw: str):
     ]
 
     totals = data.get("totals", {}) or {}
-
     return products, totals
