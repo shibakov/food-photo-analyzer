@@ -18,14 +18,28 @@ app = FastAPI()
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Add CORS middleware to handle preflight OPTIONS requests
+# --- FIXED CORS CONFIG ------------------------------------------
+# Railway + localhost + Telegram mini-app должны работать без ошибок.
+# Если CORS_ORIGINS пустой — fallback к расширенному списку.
+default_origins = [
+    "http://localhost:5173",
+    "http://localhost:4173",
+    "https://*.web.telegram.org",
+    "https://food-photo-analyzer-production.up.railway.app",
+    "*",  # временно для тестов; потом можно убрать
+]
+
+origins = CORS_ORIGINS if CORS_ORIGINS else default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials=False,
+    allow_origins=origins,
+    allow_credentials=True,   # важно для корректной работы браузера
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+# ---------------------------------------------------------------
 
 
 @app.get("/health")
