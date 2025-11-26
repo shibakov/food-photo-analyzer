@@ -11,8 +11,12 @@ from src.image_preprocess import ImagePreprocessor
 from src.gpt_vision import analyze_food
 import os
 
+# Initialize FastAPI app
+app = FastAPI()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
+
 # Add CORS middleware to handle preflight OPTIONS requests
 app.add_middleware(
     CORSMiddleware,
