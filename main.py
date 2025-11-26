@@ -15,6 +15,7 @@ def health():
 async def analyze_photo(image: UploadFile = File(...)):
     # читаем картинку в байты
     img_bytes = await image.read()
+    img_base64 = base64.b64encode(img_bytes).decode('utf-8')
 
     prompt = """
 Распознай еду на фото.
@@ -25,30 +26,32 @@ async def analyze_photo(image: UploadFile = File(...)):
 }
 """
 
-    # ====== Главный корректный вызов Responses API ======
-    response = client.responses.create(
-        model="gpt-4o-mini",     # можешь заменить
-        input=[
+    # Правильный вызов OpenAI Vision API
+    response = client.chat.completions.create(
+        model="gpt-4o",  # Используем GPT-4o для поддержки изображений
+        messages=[
             {
                 "role": "user",
                 "content": [
                     {
-                        "type": "input_text",
+                        "type": "text",
                         "text": prompt
                     },
                     {
-                        "type": "input_image",
-                        "image": img_bytes   # <<<<< ВОТ ЭТО ПРАВИЛЬНО
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{img_base64}"
+                        }
                     }
                 ]
             }
         ]
     )
 
-    # безопасное извлечение текста
-    result_text = getattr(response, "output_text", None)
+    # Извлекаем текст из ответа
+    result_text = response.choices[0].message.content
 
     if not result_text:
-        return {"error": "model returned no text", "raw": response.model_dump()}
+        return {"error": "model returned no text"}
 
     return {"result": result_text}
