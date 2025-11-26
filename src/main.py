@@ -4,12 +4,15 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import base64
 import time
+import logging
 
 from src.services import analyze_image_with_vision, refine_products
+from src.image_preprocess import ImagePreprocessor
+from src.gpt_vision import analyze_food
+import os
 
-
-app = FastAPI()
-
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 # Add CORS middleware to handle preflight OPTIONS requests
 app.add_middleware(
     CORSMiddleware,
@@ -53,3 +56,43 @@ async def analyze_photo(image: UploadFile = File(None)):
         return refine_json
     except Exception as e:
         raise HTTPException(422, f"Analysis error: {str(e)}")
+
+
+@app.post("/recognize")
+async def recognize_food(image: UploadFile = File(None)):
+    """Optimized endpoint: preprocess → single GPT-4o-mini vision call."""
+    if not image:
+        raise HTTPException(422, "Image field is required")
+
+    if image.content_type not in ["image/jpeg", "image/png"]:
+        raise HTTPException(422, "Unsupported format (use jpeg/png)")
+
+    total_start = time.time()
+
+    try:
+        # Save uploaded image temporarily
+        temp_input = f"/tmp/preprocess/input_{time.time()}.jpg"
+        content = await image.read()
+        with open(temp_input, 'wb') as f:
+            f.write(content)
+
+        # For now, skip preprocessing - call GPT directly on uploaded image
+        gpt_start = time.time()
+        result_json = analyze_food(temp_input)
+        gpt_time = time.time() - gpt_start
+
+        # Add timing info
+        total_time = time.time() - total_start
+        result_json["processing_time_ms"] = round(total_time * 1000, 2)
+        result_json["gpt_analysis_time_ms"] = round(gpt_time * 1000, 2)
+
+        # Cleanup temp file
+        try:
+            os.remove(temp_input)
+        except:
+            pass
+
+        return result_json
+
+    except Exception as e:
+        raise HTTPException(422, f"Recognition error: {str(e)}")
