@@ -1,5 +1,7 @@
 import logging
+import time
 
+from src.gpt_vision import analyze_food as gpt_vision_fallback, _get_vision_model_name
 from .preprocess import preprocess_image
 from .detector import FoodDetector
 from .refiner import GPTRefiner
@@ -63,43 +65,120 @@ class VisionPipeline:
         """
         logger.info("VisionPipeline: starting analysis for %s", image_path)
 
+        t_total_start = time.perf_counter()
+
         # 1) Lightweight detector-focused preprocessing
+        t_pre_start = time.perf_counter()
         img = preprocess_image(image_path)
+        t_pre_end = time.perf_counter()
+        preproc_s = t_pre_end - t_pre_start
+        logger.info("VisionPipeline: preprocess done in %.3fs", preproc_s)
 
         # 2) Local YOLO detection (with graceful degradation)
         detector = self.detector or _get_detector_singleton()
         if not detector:
+            # Detector never initialized or failed to load -> direct GPT-vision fallback
+            vision_model = _get_vision_model_name()
             logger.warning(
-                "VisionPipeline: detector unavailable, falling back to GPT vision for %s",
+                "VisionPipeline: detector unavailable, falling back to GPT vision "
+                "(model=%s) for %s",
+                vision_model,
                 image_path,
             )
-            from src.gpt_vision import analyze_food as fallback
+            t_fb_start = time.perf_counter()
+            result = gpt_vision_fallback(image_path)
+            t_fb_end = time.perf_counter()
+            fb_s = t_fb_end - t_fb_start
+            total_s = t_fb_end - t_total_start
+            logger.info(
+                "VisionPipeline: completed via GPT-vision model=%s; "
+                "timings: preprocess=%.3fs, gpt_vision=%.3fs, total=%.3fs",
+                vision_model,
+                preproc_s,
+                fb_s,
+                total_s,
+            )
+            return result
 
-            return fallback(image_path)
-
+        # Try local detector
         try:
+            t_det_start = time.perf_counter()
             detections = detector.detect(img)
+            t_det_end = time.perf_counter()
+            detect_s = t_det_end - t_det_start
         except Exception as e:
             logger.error(
                 "VisionPipeline: detector error for %s: %s; falling back to GPT vision",
                 image_path,
                 e,
             )
-            from src.gpt_vision import analyze_food as fallback
+            vision_model = _get_vision_model_name()
+            t_fb_start = time.perf_counter()
+            result = gpt_vision_fallback(image_path)
+            t_fb_end = time.perf_counter()
+            fb_s = t_fb_end - t_fb_start
+            total_s = t_fb_end - t_total_start
+            logger.info(
+                "VisionPipeline: completed via GPT-vision model=%s after detector error; "
+                "timings: preprocess=%.3fs, gpt_vision=%.3fs, total=%.3fs",
+                vision_model,
+                preproc_s,
+                fb_s,
+                total_s,
+            )
+            return result
 
-            return fallback(image_path)
-
-        logger.info("VisionPipeline: detector returned %d objects", len(detections))
+        logger.info(
+            "VisionPipeline: detector returned %d objects in %.3fs",
+            len(detections),
+            detect_s,
+        )
 
         # 3) Fallback: if detector didn't find anything, call GPT-vision directly
         if len(detections) == 0:
+            vision_model = _get_vision_model_name()
             logger.warning(
-                "VisionPipeline: no detections, falling back to GPT vision for %s",
+                "VisionPipeline: no detections, falling back to GPT vision (model=%s) "
+                "for %s",
+                vision_model,
                 image_path,
             )
-            from src.gpt_vision import analyze_food as fallback
-
-            return fallback(image_path)
+            t_fb_start = time.perf_counter()
+            result = gpt_vision_fallback(image_path)
+            t_fb_end = time.perf_counter()
+            fb_s = t_fb_end - t_fb_start
+            total_s = t_fb_end - t_total_start
+            logger.info(
+                "VisionPipeline: completed via GPT-vision model=%s; "
+                "timings: preprocess=%.3fs, detect=%.3fs, gpt_vision=%.3fs, total=%.3fs",
+                vision_model,
+                preproc_s,
+                detect_s,
+                fb_s,
+                total_s,
+            )
+            return result
 
         # 4) GPT-mini refinement using nutrition schema
-        return self.refiner.refine(detections, FOOD_NUTRITION)
+        t_ref_start = time.perf_counter()
+        result = self.refiner.refine(detections, FOOD_NUTRITION)
+        t_ref_end = time.perf_counter()
+        refine_s = t_ref_end - t_ref_start
+        total_s = t_ref_end - t_total_start
+
+        detector_model = getattr(detector, "model_path", "models/yolov8n.onnx")
+        refiner_model = getattr(self.refiner, "model", "gpt-4o-mini")
+
+        logger.info(
+            "VisionPipeline: completed via local detector model=%s + GPT refiner "
+            "model=%s; timings: preprocess=%.3fs, detect=%.3fs, refine=%.3fs, "
+            "total=%.3fs",
+            detector_model,
+            refiner_model,
+            preproc_s,
+            detect_s,
+            refine_s,
+            total_s,
+        )
+
+        return result
