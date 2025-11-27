@@ -146,12 +146,17 @@ async def recognize_food(image: UploadFile = File(None)):
             temp_input,
         )
         logging.info(
-            "[PIPELINE] Step 1: Preprocessing completed in %sms (resize=%sms, crop=%sms, remove_bg=%sms, final_resize=%sms)",
-            preprocess_timings.get("total_ms"),
+            "[PIPELINE] Step 1: Preprocessing completed in %sms "
+            "(strategy=%s, resize_ms=%sms, crop_ms=%sms, rembg_ms=%sms, "
+            "grabcut_ms=%sms, final_resize_ms=%sms, timed_out=%s)",
+            preprocess_timings.get("preprocess_total_ms") or preprocess_timings.get("total_ms"),
+            preprocess_timings.get("strategy_used"),
             preprocess_timings.get("resize_ms"),
             preprocess_timings.get("crop_ms"),
-            preprocess_timings.get("remove_bg_ms"),
+            preprocess_timings.get("rembg_ms"),
+            preprocess_timings.get("grabcut_ms") or preprocess_timings.get("grabcut_total_ms"),
             preprocess_timings.get("final_resize_ms"),
+            preprocess_timings.get("timed_out"),
         )
 
         # GPT-анализ
@@ -170,18 +175,48 @@ async def recognize_food(image: UploadFile = File(None)):
 
         # Тайминги
         total_time = time.time() - total_start
-        result_json["processing_times"] = {
-            "preprocessing_ms": preprocess_timings.get("total_ms"),
+
+        preprocess_total_ms = preprocess_timings.get("preprocess_total_ms") or preprocess_timings.get("total_ms")
+        processing_times = {
+            "preprocess_total_ms": preprocess_total_ms,
+            "resize_ms": preprocess_timings.get("resize_ms"),
+            "crop_ms": preprocess_timings.get("crop_ms"),
+            "rembg_ms": preprocess_timings.get("rembg_ms"),
+            "grabcut_ms": preprocess_timings.get("grabcut_ms") or preprocess_timings.get("grabcut_total_ms"),
             "gpt_ms": round(gpt_time * 1000, 2),
             "total_ms": round(total_time * 1000, 2),
+            "strategy_used": preprocess_timings.get("strategy_used"),
+            "fallback_strategy_used": preprocess_timings.get("fallback_strategy_used"),
+            "timed_out": preprocess_timings.get("timed_out"),
+            "image_input_resolution": preprocess_timings.get("image_input_resolution"),
+            "image_output_resolution": preprocess_timings.get("image_output_resolution"),
             "preprocess_breakdown": preprocess_timings,
             "rembg_model": REMBG_MODEL,
             "plate_crop_enabled": ENABLE_PLATE_CROP,
         }
 
+        result_json["processing_times"] = processing_times
+
         # Логируем сводку по этапам в ms
-        logging.info("[PIPELINE] /recognize timings_ms=%s", result_json["processing_times"])
-        logging.info(f"[PIPELINE] /recognize completed successfully, total time: {round(total_time * 1000, 2)}ms")
+        logging.info(
+            "[PIPELINE] /recognize timings_ms: preprocess_total_ms=%s, rembg_ms=%s, "
+            "grabcut_ms=%s, resize_ms=%s, gpt_ms=%s, strategy=%s, fallback=%s, "
+            "in_res=%s, out_res=%s, total_ms=%s",
+            processing_times.get("preprocess_total_ms"),
+            processing_times.get("rembg_ms"),
+            processing_times.get("grabcut_ms"),
+            processing_times.get("resize_ms"),
+            processing_times.get("gpt_ms"),
+            processing_times.get("strategy_used"),
+            processing_times.get("fallback_strategy_used"),
+            processing_times.get("image_input_resolution"),
+            processing_times.get("image_output_resolution"),
+            processing_times.get("total_ms"),
+        )
+        logging.info(
+            "[PIPELINE] /recognize completed successfully, total time: %sms",
+            processing_times.get("total_ms"),
+        )
 
         # Чистим временный файл
         try:
