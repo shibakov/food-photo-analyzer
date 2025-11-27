@@ -46,6 +46,7 @@ app.add_middleware(
 # -----------------------------------
 
 @app.get("/health")
+@app.get("/api/health")
 def health():
     return {"status": "ok"}
 
@@ -55,6 +56,7 @@ def health():
 # -----------------------------------
 
 @app.post("/analyze")
+@app.post("/api/analyze")
 async def analyze_photo(image: UploadFile = File(None)):
     if not image:
         raise HTTPException(422, "Image field is required")
@@ -111,6 +113,7 @@ async def analyze_photo(image: UploadFile = File(None)):
 # -----------------------------------
 
 @app.post("/recognize")
+@app.post("/api/recognize")
 async def recognize_food(image: UploadFile = File(None)):
     """
     Optimized endpoint: preprocess → single GPT-4o-mini vision call.
