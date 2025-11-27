@@ -31,23 +31,15 @@ logging.basicConfig(
 # -----------------------------------
 # CORS
 # -----------------------------------
-
-if ALLOW_ALL_ORIGINS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=CORS_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Разрешаем все origins для упрощения интеграции с фронтендом (в т.ч. Railway)
+# Если понадобится ограничить домены — можно вернуть проверку CORS_ORIGINS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -----------------------------------
 # Тех. эндпоинты
