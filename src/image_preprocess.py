@@ -7,10 +7,16 @@ from io import BytesIO
 import cv2
 import numpy as np
 from PIL import Image
-from rembg import remove
+from rembg import new_session, remove
 import logging
 
+from src.config import REMBG_MODEL, ENABLE_PLATE_CROP
+
 logger = logging.getLogger(__name__)
+
+# Initialize rembg session once per process
+_rembg_session = new_session(model_name=REMBG_MODEL)
+logger.info("Initialized rembg session with model %s", REMBG_MODEL)
 
 
 def safe_imread(path):
@@ -59,7 +65,7 @@ def crop_to_plate(input_path, output_path):
 
 def remove_background(input_path, output_path):
     with open(input_path, "rb") as i:
-        data = remove(i.read())
+        data = remove(i.read(), session=_rembg_session)
 
     # force JPEG output
     img = Image.open(BytesIO(data)).convert("RGB")
@@ -75,7 +81,12 @@ def preprocess_image(path):
     Returns:
         (final_path, timings_dict)
     """
-    logger.info(f"Starting preprocessing for: {path}")
+    logger.info(
+        "Starting preprocessing for: %s (rembg_model=%s, plate_crop_enabled=%s)",
+        path,
+        REMBG_MODEL,
+        ENABLE_PLATE_CROP,
+    )
 
     base = "/tmp/preprocess"
     os.makedirs(base, exist_ok=True)
@@ -95,17 +106,22 @@ def preprocess_image(path):
         timings["resize_ms"] = round((time.time() - t) * 1000, 2)
         logger.info(f"Resized image saved: {resized}")
 
-        # Crop
-        t = time.time()
-        try:
-            cropped_ok = crop_to_plate(resized, cropped)
-        except Exception as e:
-            logger.warning(f"Cropping failed: {e}")
+        # Optional crop to plate
+        if ENABLE_PLATE_CROP:
+            t = time.time()
+            try:
+                cropped_ok = crop_to_plate(resized, cropped)
+            except Exception as e:
+                logger.warning(f"Cropping failed: {e}")
+                cropped_ok = False
+            timings["crop_ms"] = round((time.time() - t) * 1000, 2)
+            to_bg = cropped if cropped_ok else resized
+            logger.info(f"Cropping result: {'success' if cropped_ok else 'skipped'}")
+        else:
             cropped_ok = False
-        timings["crop_ms"] = round((time.time() - t) * 1000, 2)
-
-        to_bg = cropped if cropped_ok else resized
-        logger.info(f"Cropping result: {'success' if cropped_ok else 'skipped'}")
+            timings["crop_ms"] = 0.0
+            to_bg = resized
+            logger.info("Cropping is disabled via ENABLE_PLATE_CROP")
 
         # Background removal
         t = time.time()

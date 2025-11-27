@@ -3,11 +3,12 @@
 import base64
 import os
 import time
+import asyncio
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.config import CORS_ORIGINS, ALLOW_ALL_ORIGINS
+from src.config import CORS_ORIGINS, ALLOW_ALL_ORIGINS, REMBG_MODEL, ENABLE_PLATE_CROP
 from src.services import analyze_image_with_vision, refine_products
 from src.image_preprocess import preprocess_image
 from src.gpt_vision import analyze_food
@@ -146,7 +147,10 @@ async def recognize_food(image: UploadFile = File(None)):
 
         # Препроцесс
         logging.info("[PIPELINE] Step 1: Starting image preprocessing")
-        processed_path, preprocess_timings = preprocess_image(temp_input)
+        processed_path, preprocess_timings = await asyncio.to_thread(
+            preprocess_image,
+            temp_input,
+        )
         logging.info(
             "[PIPELINE] Step 1: Preprocessing completed in %sms (resize=%sms, crop=%sms, remove_bg=%sms, final_resize=%sms)",
             preprocess_timings.get("total_ms"),
@@ -159,9 +163,16 @@ async def recognize_food(image: UploadFile = File(None)):
         # GPT-анализ
         gpt_start = time.time()
         logging.info("[PIPELINE] Step 2: Starting GPT analysis")
-        result_json = analyze_food(processed_path)
+        result_json = await asyncio.to_thread(
+            analyze_food,
+            processed_path,
+        )
         gpt_time = time.time() - gpt_start
-        logging.info(f"[PIPELINE] Step 2: GPT analysis completed in {round(gpt_time * 1000, 2)}ms, found {len(result_json.get('products', []))} products")
+        logging.info(
+            "[PIPELINE] Step 2: GPT analysis completed in %sms, found %s products",
+            round(gpt_time * 1000, 2),
+            len(result_json.get("products", [])),
+        )
 
         # Тайминги
         total_time = time.time() - total_start
@@ -170,6 +181,8 @@ async def recognize_food(image: UploadFile = File(None)):
             "gpt_ms": round(gpt_time * 1000, 2),
             "total_ms": round(total_time * 1000, 2),
             "preprocess_breakdown": preprocess_timings,
+            "rembg_model": REMBG_MODEL,
+            "plate_crop_enabled": ENABLE_PLATE_CROP,
         }
 
         logging.info(f"[PIPELINE] /recognize completed successfully, total time: {round(total_time * 1000, 2)}ms")
