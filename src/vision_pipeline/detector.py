@@ -1,9 +1,7 @@
 import logging
 from typing import List, Dict
 
-import cv2
-import numpy as np
-import onnxruntime as ort
+import numpy as np  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +14,22 @@ class FoodDetector:
     """
 
     def __init__(self, model_path: str = "models/yolov8n.onnx"):
+        """
+        Initialize detector.
+
+        Heavy deps (onnxruntime) are imported lazily here so that just importing
+        this module does NOT crash the whole app if onnxruntime is unavailable.
+        """
         self.model_path = model_path
         logger.info("Initializing FoodDetector with model: %s", model_path)
+
+        try:
+            import onnxruntime as ort  # type: ignore
+        except Exception as e:
+            logger.error("Failed to import onnxruntime: %s", e)
+            # Let caller (VisionPipeline) handle this and fall back to GPT-vision
+            raise
+
         # CPU-only for maximum portability
         self.session = ort.InferenceSession(
             model_path,
@@ -41,6 +53,10 @@ class FoodDetector:
         """
         if image is None or image.size == 0:
             raise ValueError("Empty image passed to detector")
+
+        # Import lightweight deps lazily to avoid hard failures at module import time
+        import numpy as np  # type: ignore
+        import cv2  # type: ignore
 
         h, w = image.shape[:2]
 
