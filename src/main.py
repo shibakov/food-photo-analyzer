@@ -8,10 +8,9 @@ import asyncio
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.config import CORS_ORIGINS, ALLOW_ALL_ORIGINS, REMBG_MODEL, ENABLE_PLATE_CROP
+from src.config import CORS_ORIGINS, ALLOW_ALL_ORIGINS
 from src.services import analyze_image_with_vision, refine_products
-from src.image_preprocess import preprocess_image
-from src.gpt_vision import analyze_food
+from src.vision_pipeline.pipeline import VisionPipeline
 
 # -----------------------------------
 # Инициализация приложения
@@ -27,6 +26,9 @@ logging.basicConfig(
     stream=sys.stdout,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
+
+# Global vision pipeline instance (reuses YOLO ONNX singleton internally)
+vision_pipeline = VisionPipeline()
 
 # -----------------------------------
 # CORS
@@ -116,9 +118,9 @@ async def analyze_photo(image: UploadFile = File(None)):
 @app.post("/api/recognize")
 async def recognize_food(image: UploadFile = File(None)):
     """
-    Optimized endpoint: preprocess → single GPT-4o-mini vision call.
+    Optimized endpoint: local YOLOv8n ONNX + GPT-4o-mini refiner.
     """
-    logging.debug("📸 /recognize called — starting pipeline")
+    logging.debug("📸 /recognize called — starting fast vision pipeline")
 
     if not image:
         raise HTTPException(422, "Image field is required")
@@ -130,105 +132,43 @@ async def recognize_food(image: UploadFile = File(None)):
     logging.info(f"[PIPELINE] Starting /recognize endpoint for file: {image.filename}")
 
     try:
-        # Готовим временную папку
-        tmp_dir = "/tmp/preprocess"
+        # Temporary directory for raw upload
+        tmp_dir = "/tmp/vision_pipeline"
         os.makedirs(tmp_dir, exist_ok=True)
 
         temp_input = os.path.join(tmp_dir, f"input_{time.time()}.jpg")
 
-        # Сохраняем файл
+        # Save uploaded file
         content = await image.read()
         with open(temp_input, "wb") as f:
             f.write(content)
-        logging.info(f"[PIPELINE] Saved input image: {temp_input}")
+        logging.info(f"[PIPELINE] Saved input image for vision pipeline: {temp_input}")
 
-        # Препроцесс
-        logging.info("[PIPELINE] Step 1: Starting image preprocessing")
-        processed_path, preprocess_timings = await asyncio.to_thread(
-            preprocess_image,
+        # Run fast local vision pipeline in thread to avoid blocking event loop
+        pipeline_start = time.time()
+        result_json = await asyncio.to_thread(
+            vision_pipeline.analyze,
             temp_input,
         )
-        logging.info(
-            "[PIPELINE] Step 1: Preprocessing completed in %sms "
-            "(strategy=%s, resize_ms=%sms, crop_ms=%sms, rembg_ms=%sms, "
-            "grabcut_ms=%sms, final_resize_ms=%sms, timed_out=%s)",
-            preprocess_timings.get("preprocess_total_ms") or preprocess_timings.get("total_ms"),
-            preprocess_timings.get("strategy_used"),
-            preprocess_timings.get("resize_ms"),
-            preprocess_timings.get("crop_ms"),
-            preprocess_timings.get("rembg_ms"),
-            preprocess_timings.get("grabcut_ms") or preprocess_timings.get("grabcut_total_ms"),
-            preprocess_timings.get("final_resize_ms"),
-            preprocess_timings.get("timed_out"),
-        )
+        pipeline_time = time.time() - pipeline_start
 
-        # GPT-анализ
-        gpt_start = time.time()
-        logging.info("[PIPELINE] Step 2: Starting GPT analysis")
-        result_json = await asyncio.to_thread(
-            analyze_food,
-            processed_path,
-        )
-        gpt_time = time.time() - gpt_start
-        logging.info(
-            "[PIPELINE] Step 2: GPT analysis completed in %sms, found %s products",
-            round(gpt_time * 1000, 2),
-            len(result_json.get("products", [])),
-        )
-
-        # Тайминги
+        # Timings
         total_time = time.time() - total_start
-
-        preprocess_total_ms = preprocess_timings.get("preprocess_total_ms") or preprocess_timings.get("total_ms")
         processing_times = {
-            "preprocess_total_ms": preprocess_total_ms,
-            "resize_ms": preprocess_timings.get("resize_ms"),
-            "crop_ms": preprocess_timings.get("crop_ms"),
-            "rembg_ms": preprocess_timings.get("rembg_ms"),
-            "grabcut_ms": preprocess_timings.get("grabcut_ms") or preprocess_timings.get("grabcut_total_ms"),
-            "gpt_ms": round(gpt_time * 1000, 2),
+            "pipeline_ms": round(pipeline_time * 1000, 2),
             "total_ms": round(total_time * 1000, 2),
-            "strategy_used": preprocess_timings.get("strategy_used"),
-            "preprocess_strategy_requested": preprocess_timings.get("preprocess_strategy_requested"),
-            "fallback_strategy_used": preprocess_timings.get("fallback_strategy_used"),
-            "timed_out": preprocess_timings.get("timed_out"),
-            "image_input_resolution": preprocess_timings.get("image_input_resolution"),
-            "image_output_resolution": preprocess_timings.get("image_output_resolution"),
-            "image_pixel_count": preprocess_timings.get("image_pixel_count"),
-            "output_pixel_count": preprocess_timings.get("output_pixel_count"),
-            "preprocess_breakdown": preprocess_timings,
-            "rembg_model": REMBG_MODEL,
-            "plate_crop_enabled": ENABLE_PLATE_CROP,
         }
 
         result_json["processing_times"] = processing_times
 
-        # Логируем сводку по этапам в ms и ключевые параметры стратегии/размера
         logging.info(
-            "[PIPELINE] /recognize timings_ms: preprocess_total_ms=%s, rembg_ms=%s, "
-            "grabcut_ms=%s, resize_ms=%s, gpt_ms=%s, strategy_used=%s, "
-            "preprocess_strategy_requested=%s, fallback=%s, "
-            "in_res=%s, out_res=%s, image_px=%s, output_px=%s, total_ms=%s",
-            processing_times.get("preprocess_total_ms"),
-            processing_times.get("rembg_ms"),
-            processing_times.get("grabcut_ms"),
-            processing_times.get("resize_ms"),
-            processing_times.get("gpt_ms"),
-            processing_times.get("strategy_used"),
-            processing_times.get("preprocess_strategy_requested"),
-            processing_times.get("fallback_strategy_used"),
-            processing_times.get("image_input_resolution"),
-            processing_times.get("image_output_resolution"),
-            processing_times.get("image_pixel_count"),
-            processing_times.get("output_pixel_count"),
+            "[PIPELINE] /recognize completed successfully, pipeline_ms=%s, total_ms=%s, products=%s",
+            processing_times.get("pipeline_ms"),
             processing_times.get("total_ms"),
-        )
-        logging.info(
-            "[PIPELINE] /recognize completed successfully, total time: %sms",
-            processing_times.get("total_ms"),
+            len(result_json.get("products", [])),
         )
 
-        # Чистим временный файл
+        # Clean up temp file
         try:
             os.remove(temp_input)
         except Exception:

@@ -1,14 +1,22 @@
-"""Single-call GPT-4o vision service for food analysis."""
+"""Fallback GPT vision service for food analysis.
+
+This module is now used ONLY as a backup when the local YOLO ONNX detector
+in src.vision_pipeline fails to find any objects.
+
+Design goals:
+- super short prompt (minimal tokens)
+- single vision call
+- always return stable JSON (response_format=json_object)
+"""
 
 import base64
 import json
 import logging
-import re
 from typing import Any, Dict
 
 from src.openai_client import get_openai_client
 from src.prompts import SYSTEM_PROMPT
-from src.config import GPT_MODEL, USE_LOCAL_FAST_MODEL
+from src.config import GPT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +27,7 @@ def _client():
 
 def _get_vision_model_name() -> str:
     """
-    Resolve which GPT vision model to use for analysis.
+    Resolve which GPT vision model to use for fallback analysis.
 
     Controlled via GPT_MODEL env:
     - "gpt-4o-mini" (default)
@@ -29,95 +37,23 @@ def _get_vision_model_name() -> str:
     return model or "gpt-4o-mini"
 
 
-def _run_local_fast_model(image_path: str) -> Dict[str, Any]:
-    """
-    Local fast-model fallback placeholder.
-
-    TODO:
-    - plug MobileNet/EfficientNet-Lite classifier (via ONNX)
-    - plug Tesseract OCR for package text
-    - combine signals into structured products/totals
-
-    For now this returns a structured stub so that the API shape is stable.
-    """
-    logger.warning(
-        "Local fast model fallback is enabled, but offline pipeline is not "
-        "implemented yet. Returning empty stub result."
-    )
-    return {
-        "products": [],
-        "totals": {"kcal": 0, "protein": 0, "fat": 0, "carbs": 0},
-        "meta": {
-            "local_fast_model_used": True,
-            "offline_model": "not_implemented",
-        },
-    }
-
-
-def _parse_json_from_text(text: str) -> Dict[str, Any]:
-    """
-    Try several strategies to extract JSON from model text output.
-    Raises ValueError if nothing valid is found.
-    """
-    if not text:
-        raise ValueError("Empty response from model")
-
-    # 1) Прямая попытка распарсить как JSON целиком
-    try:
-        parsed = json.loads(text.strip())
-        return parsed
-    except json.JSONDecodeError:
-        pass
-
-    # 2) Убрать ```...``` и снова попытаться
-    cleaned = re.sub(r"```.*?```", "", text, flags=re.DOTALL).strip()
-    try:
-        parsed = json.loads(cleaned)
-        return parsed
-    except json.JSONDecodeError:
-        pass
-
-    # 3) Вырезать первый JSON-блок по { ... }
-    start_idx = cleaned.find("{")
-    end_idx = cleaned.rfind("}") + 1
-    if start_idx != -1 and end_idx > start_idx:
-        snippet = cleaned[start_idx:end_idx]
-        try:
-            parsed = json.loads(snippet)
-            return parsed
-        except json.JSONDecodeError:
-            pass
-
-    # 4) Регекс по всему тексту
-    json_match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-    if json_match:
-        snippet = json_match.group(0)
-        try:
-            parsed = json.loads(snippet)
-            return parsed
-        except json.JSONDecodeError:
-            pass
-
-    raise ValueError("No valid JSON found in model response")
-
-
 def analyze_food(image_path: str) -> Dict[str, Any]:
     """
-    Analyze food photo with GPT vision model using single call.
+    Lightweight fallback: analyze food photo with GPT vision using a single call.
 
-    Preprocessed image should be PNG/JPEG with background already optimized
-    (cropped region only / GrabCut / rembg).
+    Used ONLY when the fast local detector-based pipeline fails
+    to find any objects.
 
-    Returns: JSON with products and totals including individual macros.
+    Returns: JSON with products and totals.
     """
     with open(image_path, "rb") as f:
         img_data = f.read()
 
     b64_img = base64.b64encode(img_data).decode("utf-8")
 
-    # Сильно упрощённый промпт: только задача и целевая JSON-структура.
+    # Минимальный пользовательский промпт: только задача и целевая JSON-структура.
     prompt_text = (
-        'Проанализируй еду на изображении и верни только JSON вида:\n'
+        'Проанализируй еду на изображении и верни ТОЛЬКО JSON вида:\n'
         '{\n'
         '  "products": [\n'
         '    {\n'
@@ -139,9 +75,6 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
         "Никакого текста вне JSON."
     )
 
-    # Грубая оценка размера промпта в «токенах» (по кол-ву слов).
-    prompt_size_tokens = len(prompt_text.split())
-
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {
@@ -150,7 +83,7 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
                 {"type": "text", "text": prompt_text},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64_img}"},
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"},
                 },
             ],
         },
@@ -158,40 +91,30 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
 
     model_name = _get_vision_model_name()
     logger.info(
-        "Sending %.1fkb image to model=%s (prompt_size_tokens≈%s)",
-        len(b64_img) / 1024,
+        "Fallback GPT-vision: sending image to model=%s (size_kb=%.1f)",
         model_name,
-        prompt_size_tokens,
+        len(b64_img) / 1024,
     )
 
-    try:
-        response = _client().chat.completions.create(
-            model=model_name,
-            messages=messages,
-            max_tokens=1500,
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
+    response = _client().chat.completions.create(
+        model=model_name,
+        messages=messages,
+        max_tokens=500,
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
 
-        result_text = response.choices[0].message.content or ""
-        logger.info(
-            "GPT response received (model_used=%s, prompt_size_tokens≈%s, text_len=%s)",
-            model_name,
-            prompt_size_tokens,
-            len(result_text),
-        )
+    content = response.choices[0].message.content or "{}"
+    result = json.loads(content)
 
-        parsed = _parse_json_from_text(result_text)
-        logger.info("Parsed JSON with %s products", len(parsed.get("products", [])))
-        return parsed
+    # Basic shape validation
+    if "products" not in result:
+        result["products"] = []
+    if "totals" not in result:
+        result["totals"] = {"kcal": 0, "protein": 0, "fat": 0, "carbs": 0}
 
-    except Exception as e:
-        logger.error("Food analysis via OpenAI failed: %s", e)
-        if USE_LOCAL_FAST_MODEL:
-            logger.info(
-                "Falling back to local fast model (USE_LOCAL_FAST_MODEL=true). "
-                "Image path: %s",
-                image_path,
-            )
-            return _run_local_fast_model(image_path)
-        raise
+    logger.info(
+        "Fallback GPT-vision result: products=%s",
+        len(result.get("products", [])),
+    )
+    return result

@@ -9,12 +9,18 @@ AI-powered food photo analysis API that detects ingredients and calculates nutri
 pip install -r requirements.txt
 ```
 
-2. Set the OpenAI API key:
+2. Download YOLOv8n ONNX model (for fast local /recognize pipeline):
+```bash
+mkdir -p models
+wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx -O models/yolov8n.onnx
+```
+
+3. Set the OpenAI API key:
 ```bash
 export OPENAI_API_KEY="your-api-key"
 ```
 
-3. Run the server:
+4. Run the server:
 ```bash
 uvicorn main:app --reload
 # or for production:
@@ -32,6 +38,54 @@ docker run --env OPENAI_API_KEY=your_key_here -p 8080:8080 food-photo-analyzer
 ```
 
 ## API Usage
+
+### Fast Recognize (YOLO + GPT-mini)
+
+**POST** `/recognize` or `/api/recognize`
+
+Fast endpoint that uses:
+- local YOLOv8n ONNX detector (`models/yolov8n.onnx`)
+- lightweight GPT-4o-mini refiner with built-in nutrition table
+- fallback to GPT-vision only if detector finds no food objects
+
+Typical end-to-end latency on CPU is in the 2–3s range for single images (assuming reasonable network to OpenAI).
+
+#### Request
+- **Method**: POST
+- **Content-Type**: `multipart/form-data`
+- **Body**: Form field `image` containing the photo file
+- **Acceptable formats**: JPEG, PNG
+
+#### Example with curl
+```bash
+curl -X POST -F "image=@food_photo.jpg" http://localhost:8080/recognize
+```
+
+#### Response (shape)
+```json
+{
+  "products": [
+    {
+      "product_name": "chicken breast",
+      "quantity_g": 150,
+      "kcal": 248,
+      "protein": 46.5,
+      "fat": 5.4,
+      "carbs": 0
+    }
+  ],
+  "totals": {
+    "kcal": 248,
+    "protein": 46.5,
+    "fat": 5.4,
+    "carbs": 0
+  },
+  "processing_times": {
+    "pipeline_ms": 1200.5,
+    "total_ms": 1800.7
+  }
+}
+```
 
 ### Analyze Photo
 
