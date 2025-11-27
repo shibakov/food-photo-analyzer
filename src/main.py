@@ -96,6 +96,8 @@ async def analyze_photo(image: UploadFile = File(None)):
         refine_json["processing_time_ms"] = processing_times["total_ms"]
         refine_json["processing_times"] = processing_times
 
+        # Логируем сводку по этапам в ms
+        logging.info("[PIPELINE] /analyze timings_ms=%s", processing_times)
         logging.info(f"[PIPELINE] /analyze completed successfully, total time: {processing_times['total_ms']}ms")
 
         return refine_json
@@ -177,6 +179,8 @@ async def recognize_food(image: UploadFile = File(None)):
             "plate_crop_enabled": ENABLE_PLATE_CROP,
         }
 
+        # Логируем сводку по этапам в ms
+        logging.info("[PIPELINE] /recognize timings_ms=%s", result_json["processing_times"])
         logging.info(f"[PIPELINE] /recognize completed successfully, total time: {round(total_time * 1000, 2)}ms")
 
         # Чистим временный файл
