@@ -1,9 +1,16 @@
 import logging
+import os
 from typing import List, Dict
 
 import numpy as np  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+MODEL_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "models", "yolov8n.onnx")
+)
+
+_detector_singleton = None
 
 
 class FoodDetector:
@@ -13,13 +20,28 @@ class FoodDetector:
     Expects model at models/yolov8n.onnx by default.
     """
 
-    def __init__(self, model_path: str = "models/yolov8n.onnx"):
+    def __new__(cls, *args, **kwargs):
+        """
+        Singleton constructor: ensures YOLO model is loaded only once per process.
+        """
+        global _detector_singleton
+        if _detector_singleton is None:
+            _detector_singleton = super().__new__(cls)
+            _detector_singleton._initialized = False
+        return _detector_singleton
+
+    def __init__(self, model_path: str = MODEL_PATH):
         """
         Initialize detector.
 
         Heavy deps (onnxruntime) are imported lazily here so that just importing
         this module does NOT crash the whole app if onnxruntime is unavailable.
         """
+        # Guard against re-initialization in singleton
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
+
         self.model_path = model_path
         logger.info("Initializing FoodDetector with model: %s", model_path)
 

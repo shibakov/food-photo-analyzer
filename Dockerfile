@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Ensure YOLO ONNX model directory is present inside the container
+COPY models/ /app/models/
+
 COPY . .
 
 # Railway сам проставляет PORT, но можно задать дефолт локально

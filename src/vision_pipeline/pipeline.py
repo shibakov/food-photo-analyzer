@@ -24,7 +24,8 @@ def _get_detector_singleton():
     global DETECTOR_SINGLETON
     if DETECTOR_SINGLETON is None:
         try:
-            DETECTOR_SINGLETON = FoodDetector("models/yolov8n.onnx")
+            # Use internal MODEL_PATH from FoodDetector by default so path resolution is robust
+            DETECTOR_SINGLETON = FoodDetector()
         except Exception as e:
             logger.error(
                 "Failed to initialize FoodDetector (models/yolov8n.onnx): %s",
