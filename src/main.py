@@ -186,10 +186,13 @@ async def recognize_food(image: UploadFile = File(None)):
             "gpt_ms": round(gpt_time * 1000, 2),
             "total_ms": round(total_time * 1000, 2),
             "strategy_used": preprocess_timings.get("strategy_used"),
+            "preprocess_strategy_requested": preprocess_timings.get("preprocess_strategy_requested"),
             "fallback_strategy_used": preprocess_timings.get("fallback_strategy_used"),
             "timed_out": preprocess_timings.get("timed_out"),
             "image_input_resolution": preprocess_timings.get("image_input_resolution"),
             "image_output_resolution": preprocess_timings.get("image_output_resolution"),
+            "image_pixel_count": preprocess_timings.get("image_pixel_count"),
+            "output_pixel_count": preprocess_timings.get("output_pixel_count"),
             "preprocess_breakdown": preprocess_timings,
             "rembg_model": REMBG_MODEL,
             "plate_crop_enabled": ENABLE_PLATE_CROP,
@@ -197,20 +200,24 @@ async def recognize_food(image: UploadFile = File(None)):
 
         result_json["processing_times"] = processing_times
 
-        # Логируем сводку по этапам в ms
+        # Логируем сводку по этапам в ms и ключевые параметры стратегии/размера
         logging.info(
             "[PIPELINE] /recognize timings_ms: preprocess_total_ms=%s, rembg_ms=%s, "
-            "grabcut_ms=%s, resize_ms=%s, gpt_ms=%s, strategy=%s, fallback=%s, "
-            "in_res=%s, out_res=%s, total_ms=%s",
+            "grabcut_ms=%s, resize_ms=%s, gpt_ms=%s, strategy_used=%s, "
+            "preprocess_strategy_requested=%s, fallback=%s, "
+            "in_res=%s, out_res=%s, image_px=%s, output_px=%s, total_ms=%s",
             processing_times.get("preprocess_total_ms"),
             processing_times.get("rembg_ms"),
             processing_times.get("grabcut_ms"),
             processing_times.get("resize_ms"),
             processing_times.get("gpt_ms"),
             processing_times.get("strategy_used"),
+            processing_times.get("preprocess_strategy_requested"),
             processing_times.get("fallback_strategy_used"),
             processing_times.get("image_input_resolution"),
             processing_times.get("image_output_resolution"),
+            processing_times.get("image_pixel_count"),
+            processing_times.get("output_pixel_count"),
             processing_times.get("total_ms"),
         )
         logging.info(

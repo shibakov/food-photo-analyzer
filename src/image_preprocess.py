@@ -298,13 +298,27 @@ def _run_strategy(
     timings: Dict[str, float],
     total_start: float,
 ) -> str:
-    """Dispatch to specific strategy implementation."""
-    strategy = (strategy or "rembg").lower()
-    timings["strategy_used"] = strategy
+    """Dispatch to specific strategy implementation.
 
-    if strategy == "no_bg_removal":
+    Supported values:
+        - "rembg"
+        - "no_bg" / "no_bg_removal"
+        - "grabcut"
+    """
+    requested = (strategy or "rembg").lower()
+    # Keep the originally requested value for logging/metrics
+    timings["preprocess_strategy_requested"] = requested
+
+    # Normalize aliases
+    normalized = requested
+    if normalized == "no_bg":
+        normalized = "no_bg_removal"
+
+    timings["strategy_used"] = normalized
+
+    if normalized == "no_bg_removal":
         return _strategy_no_bg_removal(src_path, workdir, timings, total_start)
-    if strategy == "grabcut":
+    if normalized == "grabcut":
         return _strategy_grabcut(src_path, workdir, timings, total_start)
     # default: rembg
     return _strategy_rembg(src_path, workdir, timings, total_start)
@@ -341,6 +355,7 @@ def preprocess_image(path: str):
 
     input_w, input_h = get_image_resolution(path)
     timings["image_input_resolution"] = {"width": input_w, "height": input_h}
+    timings["image_pixel_count"] = input_w * input_h
     timings["fallback_strategy_used"] = None
     timings["timed_out"] = False
 
@@ -401,6 +416,7 @@ def preprocess_image(path: str):
         # Output resolution
         out_w, out_h = get_image_resolution(final_path)
         timings["image_output_resolution"] = {"width": out_w, "height": out_h}
+        timings["output_pixel_count"] = out_w * out_h
 
         logger.info(
             "Preprocessing completed (strategy=%s, fallback=%s, total=%sms)",

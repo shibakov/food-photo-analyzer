@@ -18,13 +18,15 @@ ALLOW_ALL_ORIGINS = CORS_ORIGINS == ["*"]
 REMBG_MODEL = os.getenv("REMBG_MODEL", "u2netp")
 
 # ENABLE_PLATE_CROP: whether to run expensive HoughCircles-based crop_to_plate
-ENABLE_PLATE_CROP = os.getenv("ENABLE_PLATE_CROP", "false").lower() == "true"
+# Default: enabled ("true") to help GPT focus on the plate region.
+ENABLE_PLATE_CROP = os.getenv("ENABLE_PLATE_CROP", "true").lower() == "true"
 
 # PREPROCESS_STRATEGY:
-# - "rembg"          — current default pipeline with background removal
-# - "no_bg_removal"  — resize + region detection only, no background removal step
-# - "grabcut"        — fast GrabCut-based crop of main foreground region
-PREPROCESS_STRATEGY = os.getenv("PREPROCESS_STRATEGY", "rembg").lower()
+# - "rembg"           — rembg-based background removal
+# - "no_bg"           — alias for "no_bg_removal"
+# - "no_bg_removal"   — resize + optional plate crop only, no background removal
+# - "grabcut"         — fast GrabCut-based crop of main foreground region (recommended default)
+PREPROCESS_STRATEGY = os.getenv("PREPROCESS_STRATEGY", "grabcut").lower()
 
 # PREPROCESS_FALLBACK_STRATEGY:
 # - "no_bg_removal" (default)
@@ -36,21 +38,24 @@ PREPROCESS_FALLBACK_STRATEGY = os.getenv("PREPROCESS_FALLBACK_STRATEGY", "no_bg_
 USE_BACKEND_RESIZE = os.getenv("USE_BACKEND_RESIZE", "true").lower() == "true"
 
 # BACKEND_MAX_SIDE_PX: longer side of image after initial resize (for all strategies)
-BACKEND_MAX_SIDE_PX = int(os.getenv("BACKEND_MAX_SIDE_PX", "600"))
+# Reduced default to 400px to speed up GPT vision latency.
+BACKEND_MAX_SIDE_PX = int(os.getenv("BACKEND_MAX_SIDE_PX", "400"))
 
 # PRELOAD_REMBG_MODEL: load rembg model once on service startup (singleton)
-PRELOAD_REMBG_MODEL = os.getenv("PRELOAD_REMBG_MODEL", "true").lower() == "true"
+# Default: disabled to avoid rembg overhead unless explicitly requested.
+PRELOAD_REMBG_MODEL = os.getenv("PRELOAD_REMBG_MODEL", "false").lower() == "true"
 
 # PREPROCESS_TIMEOUT_MS: hard timeout for full preprocessing pipeline (0 = disabled)
-PREPROCESS_TIMEOUT_MS = int(os.getenv("PREPROCESS_TIMEOUT_MS", "1000"))
+# Reduced to 500ms so that heavy strategies (like rembg) quickly fall back.
+PREPROCESS_TIMEOUT_MS = int(os.getenv("PREPROCESS_TIMEOUT_MS", "500"))
 
 # -----------------------------------
 # GPT / models configuration
 # -----------------------------------
 
 # GPT_MODEL: main vision model for food analysis (used in /recognize pipeline)
-# Expected values: "gpt-4o" (default) or "gpt-4o-mini"
-GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o")
+# Expected values: "gpt-4o-mini" (default) or "gpt-4o"
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 
 # USE_LOCAL_FAST_MODEL: enable local offline fallback (CNN + OCR) when OpenAI fails
 USE_LOCAL_FAST_MODEL = os.getenv("USE_LOCAL_FAST_MODEL", "false").lower() == "true"

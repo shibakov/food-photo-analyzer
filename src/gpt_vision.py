@@ -22,11 +22,11 @@ def _get_vision_model_name() -> str:
     Resolve which GPT vision model to use for analysis.
 
     Controlled via GPT_MODEL env:
-    - "gpt-4o" (default)
-    - "gpt-4o-mini"
+    - "gpt-4o-mini" (default)
+    - "gpt-4o"
     """
-    model = (GPT_MODEL or "gpt-4o").strip()
-    return model or "gpt-4o"
+    model = (GPT_MODEL or "gpt-4o-mini").strip()
+    return model or "gpt-4o-mini"
 
 
 def _run_local_fast_model(image_path: str) -> Dict[str, Any]:
@@ -115,16 +115,32 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
 
     b64_img = base64.b64encode(img_data).decode("utf-8")
 
-    # Minimal task description: structure + KБЖУ, no extra text.
+    # Сильно упрощённый промпт: только задача и целевая JSON-структура.
     prompt_text = (
-        "Проанализируй фото блюда и верни JSON со списком продуктов и суммарными КБЖУ.\n\n"
-        '{\n  "products": [\n    {\n      "product_name": "",\n'
-        '      "quantity_g": 0,\n      "kcal": 0,\n      "protein": 0,\n'
-        '      "fat": 0,\n      "carbs": 0\n    }\n  ],\n'
-        '  "totals": {\n    "kcal": 0,\n    "protein": 0,\n'
-        '    "fat": 0,\n    "carbs": 0\n  }\n}\n\n'
+        'Проанализируй еду на изображении и верни только JSON вида:\n'
+        '{\n'
+        '  "products": [\n'
+        '    {\n'
+        '      "product_name": "",\n'
+        '      "quantity_g": 0,\n'
+        '      "kcal": 0,\n'
+        '      "protein": 0,\n'
+        '      "fat": 0,\n'
+        '      "carbs": 0\n'
+        '    }\n'
+        '  ],\n'
+        '  "totals": {\n'
+        '    "kcal": 0,\n'
+        '    "protein": 0,\n'
+        '    "fat": 0,\n'
+        '    "carbs": 0\n'
+        '  }\n'
+        '}\n'
         "Никакого текста вне JSON."
     )
+
+    # Грубая оценка размера промпта в «токенах» (по кол-ву слов).
+    prompt_size_tokens = len(prompt_text.split())
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -142,9 +158,10 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
 
     model_name = _get_vision_model_name()
     logger.info(
-        "Sending %.1fkb image to model=%s",
+        "Sending %.1fkb image to model=%s (prompt_size_tokens≈%s)",
         len(b64_img) / 1024,
         model_name,
+        prompt_size_tokens,
     )
 
     try:
@@ -157,7 +174,12 @@ def analyze_food(image_path: str) -> Dict[str, Any]:
         )
 
         result_text = response.choices[0].message.content or ""
-        logger.info("GPT response received, length: %s", len(result_text))
+        logger.info(
+            "GPT response received (model_used=%s, prompt_size_tokens≈%s, text_len=%s)",
+            model_name,
+            prompt_size_tokens,
+            len(result_text),
+        )
 
         parsed = _parse_json_from_text(result_text)
         logger.info("Parsed JSON with %s products", len(parsed.get("products", [])))
