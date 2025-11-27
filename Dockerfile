@@ -11,9 +11,8 @@ RUN apt-get update && apt-get install -y \
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Ensure YOLO ONNX model directory is present inside the container
-COPY models/ /app/models/
-
+# Optional: if models/yolov8n.onnx is present in the build context, it will be copied via the line below.
+# The app is resilient to missing YOLO model and will fall back to GPT-vision if the model is unavailable.
 COPY . .
 
 # Railway сам проставляет PORT, но можно задать дефолт локально
