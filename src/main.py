@@ -118,7 +118,8 @@ async def analyze_photo(image: UploadFile = File(None)):
 @app.post("/api/recognize")
 async def recognize_food(image: UploadFile = File(None)):
     """
-    Optimized endpoint: local YOLOv8n ONNX + GPT-4o-mini refiner.
+    Optimized endpoint: local YOLOv8n ONNX + Python-only grams estimation,
+    with GPT-vision used ONLY as a fallback when YOLO is unavailable or finds nothing.
     """
     logging.debug("📸 /recognize called — starting fast vision pipeline")
 

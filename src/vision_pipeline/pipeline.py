@@ -1,16 +1,17 @@
 import logging
 import time
 
-from src.gpt_vision import analyze_food as gpt_vision_fallback, _get_vision_model_name
+from src.gpt_vision import analyze_food as fallback_analyze_food
 from .preprocess import preprocess_image
 from .detector import FoodDetector
-from .refiner import GPTRefiner
-from .food_schema import FOOD_NUTRITION
 
 logger = logging.getLogger(__name__)
 
 # Singleton detector instance so that YOLO ONNX model is loaded once per process.
 DETECTOR_SINGLETON = None
+
+# Base grams per 1.0 relative bbox area from YOLO
+BASE_WEIGHT = 350  # грамм на 1.0 относительной площади
 
 
 def _get_detector_singleton():
@@ -42,18 +43,17 @@ class VisionPipeline:
 
     - lightweight RGB preprocessing (resize + normalization)
     - local YOLOv8n ONNX detection
-    - GPT-4o-mini refinement using FOOD_NUTRITION schema
-    - fallback to GPT-vision if detector finds nothing
+    - simple Python-only gram estimation
+    - GPT-vision fallback when YOLO is unavailable or finds nothing
     """
 
     def __init__(self):
         # Reuse global singleton to avoid reloading ONNX model every request
         self.detector = _get_detector_singleton()
-        self.refiner = GPTRefiner()
 
     def analyze(self, image_path: str):
         """
-        Full analysis entrypoint.
+        YOLO-first analysis entrypoint.
 
         Args:
             image_path: path to image on disk.
@@ -62,124 +62,112 @@ class VisionPipeline:
             Dict with keys:
                 - products: list[...] (each with product_name, quantity_g, macros)
                 - totals: {...}
-            or fallback JSON from src.gpt_vision.analyze_food().
+                - meta: {pipeline, yolo_model, fallback_used}
         """
         logger.info("VisionPipeline: starting analysis for %s", image_path)
 
-        t_total_start = time.perf_counter()
+        # Global start timer
+        t0 = time.perf_counter()
 
         # 1) Lightweight detector-focused preprocessing
-        t_pre_start = time.perf_counter()
         img = preprocess_image(image_path)
-        t_pre_end = time.perf_counter()
-        preproc_s = t_pre_end - t_pre_start
-        logger.info("VisionPipeline: preprocess done in %.3fs", preproc_s)
+        t_preprocessed = time.perf_counter()
 
         # 2) Local YOLO detection (with graceful degradation)
         detector = self.detector or _get_detector_singleton()
         if not detector:
             # Detector never initialized or failed to load -> direct GPT-vision fallback
-            vision_model = _get_vision_model_name()
             logger.warning(
-                "VisionPipeline: detector unavailable, falling back to GPT vision "
-                "(model=%s) for %s",
-                vision_model,
-                image_path,
+                "[PIPELINE] YOLO detector unavailable \u2192 using GPT fallback"
             )
-            t_fb_start = time.perf_counter()
-            result = gpt_vision_fallback(image_path)
-            t_fb_end = time.perf_counter()
-            fb_s = t_fb_end - t_fb_start
-            total_s = t_fb_end - t_total_start
-            logger.info(
-                "VisionPipeline: completed via GPT-vision model=%s; "
-                "timings: preprocess=%.3fs, gpt_vision=%.3fs, total=%.3fs",
-                vision_model,
-                preproc_s,
-                fb_s,
-                total_s,
-            )
-            return result
+            return self._fallback_gpt(image_path, t_preprocessed)
 
-        # Try local detector
         try:
-            t_det_start = time.perf_counter()
             detections = detector.detect(img)
-            t_det_end = time.perf_counter()
-            detect_s = t_det_end - t_det_start
+            t_detected = time.perf_counter()
+
+            logger.info(
+                "[PIPELINE] YOLO detected %s objects in %.3f sec: %s",
+                len(detections),
+                t_detected - t_preprocessed,
+                detections,
+            )
+
         except Exception as e:
-            logger.error(
-                "VisionPipeline: detector error for %s: %s; falling back to GPT vision",
-                image_path,
-                e,
-            )
-            vision_model = _get_vision_model_name()
-            t_fb_start = time.perf_counter()
-            result = gpt_vision_fallback(image_path)
-            t_fb_end = time.perf_counter()
-            fb_s = t_fb_end - t_fb_start
-            total_s = t_fb_end - t_total_start
-            logger.info(
-                "VisionPipeline: completed via GPT-vision model=%s after detector error; "
-                "timings: preprocess=%.3fs, gpt_vision=%.3fs, total=%.3fs",
-                vision_model,
-                preproc_s,
-                fb_s,
-                total_s,
-            )
-            return result
+            logger.error("[PIPELINE] YOLO detection FAILED, error=%s", e)
+            return self._fallback_gpt(image_path, t_preprocessed)
 
-        logger.info(
-            "VisionPipeline: detector returned %d objects in %.3fs",
-            len(detections),
-            detect_s,
-        )
-
-        # 3) Fallback: if detector didn't find anything, call GPT-vision directly
-        if len(detections) == 0:
-            vision_model = _get_vision_model_name()
+        # 3) If YOLO found nothing -> GPT fallback + log
+        if not detections:
             logger.warning(
-                "VisionPipeline: no detections, falling back to GPT vision (model=%s) "
-                "for %s",
-                vision_model,
-                image_path,
+                "[PIPELINE] YOLO returned NO detections \u2192 using GPT fallback"
             )
-            t_fb_start = time.perf_counter()
-            result = gpt_vision_fallback(image_path)
-            t_fb_end = time.perf_counter()
-            fb_s = t_fb_end - t_fb_start
-            total_s = t_fb_end - t_total_start
-            logger.info(
-                "VisionPipeline: completed via GPT-vision model=%s; "
-                "timings: preprocess=%.3fs, detect=%.3fs, gpt_vision=%.3fs, total=%.3fs",
-                vision_model,
-                preproc_s,
-                detect_s,
-                fb_s,
-                total_s,
+            return self._fallback_gpt(image_path, t_preprocessed)
+
+        # 4) Python-only gram estimation (no GPT, KБЖУ=0)
+        products = []
+        for det in detections:
+            grams = det.get("size", 0.0) * BASE_WEIGHT
+            products.append(
+                {
+                    "product_name": det.get("label", "unknown"),
+                    "quantity_g": round(grams, 1),
+                    "kcal": 0,
+                    "protein": 0,
+                    "fat": 0,
+                    "carbs": 0,
+                }
             )
-            return result
 
-        # 4) GPT-mini refinement using nutrition schema
-        t_ref_start = time.perf_counter()
-        result = self.refiner.refine(detections, FOOD_NUTRITION)
-        t_ref_end = time.perf_counter()
-        refine_s = t_ref_end - t_ref_start
-        total_s = t_ref_end - t_total_start
+        # 5) Totals = zeros
+        totals = {"kcal": 0, "protein": 0, "fat": 0, "carbs": 0}
 
-        detector_model = getattr(detector, "model_path", "models/yolov8n.onnx")
-        refiner_model = getattr(self.refiner, "model", "gpt-4o-mini")
+        # 6) Final YOLO-path timing log
+        t_done = time.perf_counter()
 
         logger.info(
-            "VisionPipeline: completed via local detector model=%s + GPT refiner "
-            "model=%s; timings: preprocess=%.3fs, detect=%.3fs, refine=%.3fs, "
-            "total=%.3fs",
-            detector_model,
-            refiner_model,
-            preproc_s,
-            detect_s,
-            refine_s,
-            total_s,
+            "[PIPELINE] Completed via YOLO-only path: preprocess=%.3fs, detect=%.3fs, python_refine=%.3fs, total=%.3fs",
+            t_preprocessed - t0,
+            t_detected - t_preprocessed,
+            t_done - t_detected,
+            t_done - t0,
         )
+
+        # 10) Final JSON response
+        return {
+            "products": products,
+            "totals": totals,
+            "meta": {
+                "pipeline": "yolo_only",
+                "yolo_model": "yolov8n.onnx",
+                "fallback_used": False,
+            },
+        }
+
+    def _fallback_gpt(self, image_path: str, t_preprocessed: float):
+        """
+        Fallback path that uses GPT-vision-based analysis with detailed timing logs.
+        """
+        import time
+
+        t_before_gpt = time.perf_counter()
+
+        # 7) Call GPT-vision fallback
+        result = fallback_analyze_food(image_path)
+
+        t_after_gpt = time.perf_counter()
+
+        logger.warning(
+            "[PIPELINE] GPT fallback used: gpt_time=%.3fs, from_preprocess_to_gpt=%.3fs",
+            t_after_gpt - t_before_gpt,
+            t_after_gpt - t_preprocessed,
+        )
+
+        # Ensure meta block with fallback flag set
+        meta = result.get("meta") or {}
+        meta.setdefault("pipeline", "yolo_only")
+        meta.setdefault("yolo_model", "yolov8n.onnx")
+        meta["fallback_used"] = True
+        result["meta"] = meta
 
         return result

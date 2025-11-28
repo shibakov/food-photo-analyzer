@@ -28,20 +28,38 @@ class GPTRefiner:
     def refine(self, detections, food_schema):
         prompt = (
             "У тебя есть список объектов еды с относительными размерами.\n"
-            "Определи продукт, оцени его вес в граммах, рассчитай БЖУ.\n"
+            "Определи конкретные продукты, оцени их вес в граммах и рассчитай БЖУ.\n"
             "Используй справочник нутриентов (значения на 100 г):\n"
             f"{json.dumps(food_schema, ensure_ascii=False)}\n\n"
             "Данные детектора (label, confidence, size):\n"
             f"{json.dumps(detections, ensure_ascii=False)}\n\n"
-            "Верни строго JSON:\n"
-            "{products: [...], totals: {...}}"
+            "Верни строго JSON-объект со следующей структурой:\n"
+            "{\n"
+            '  "products": [\n'
+            "    {\n"
+            '      "product_name": "string",\n'
+            '      "quantity_g": number,\n'
+            '      "kcal": number,\n'
+            '      "protein_g": number,\n'
+            '      "fat_g": number,\n'
+            '      "carbs_g": number\n'
+            "    },\n"
+            "    ...\n"
+            "  ],\n"
+            '  "totals": {\n'
+            '    "kcal": number,\n'
+            '    "protein_g": number,\n'
+            '    "fat_g": number,\n'
+            '    "carbs_g": number\n'
+            "  }\n"
+            "}"
         )
 
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=500,
+            max_tokens=300,
             temperature=0,
         )
 
