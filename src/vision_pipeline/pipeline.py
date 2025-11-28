@@ -1,173 +1,402 @@
 import logging
 import time
+from typing import Any, Dict
+
+import numpy as np  # type: ignore
 
 from src.gpt_vision import analyze_food as fallback_analyze_food
 from .preprocess import preprocess_image
-from .detector import FoodDetector
+from .ensemble import get_ensemble_singleton, PLATE_GRAMS
 
 logger = logging.getLogger(__name__)
-
-# Singleton detector instance so that YOLO ONNX model is loaded once per process.
-DETECTOR_SINGLETON = None
-
-# Base grams per 1.0 relative bbox area from YOLO
-BASE_WEIGHT = 350  # грамм на 1.0 относительной площади
-
-
-def _get_detector_singleton():
-    """
-    Lazily initialize YOLO ONNX detector.
-
-    If model is missing or fails to load, log the error and mark detector
-    as unavailable so that the pipeline can immediately fall back to GPT-vision
-    instead of crashing the whole app.
-    """
-    global DETECTOR_SINGLETON
-    if DETECTOR_SINGLETON is None:
-        try:
-            # Use internal MODEL_PATH from FoodDetector by default so path resolution is robust
-            DETECTOR_SINGLETON = FoodDetector()
-        except Exception as e:
-            logger.error(
-                "Failed to initialize FoodDetector (models/yolov8n.onnx): %s",
-                e,
-            )
-            # Use explicit False sentinel to distinguish "never tried" vs "unavailable"
-            DETECTOR_SINGLETON = False
-    return DETECTOR_SINGLETON
 
 
 class VisionPipeline:
     """
-    High-level vision pipeline:
+    High-level ensemble vision pipeline:
 
-    - lightweight RGB preprocessing (resize + normalization)
-    - local YOLOv8n ONNX detection
-    - simple Python-only gram estimation
-    - GPT-vision fallback when YOLO is unavailable or finds nothing
+    Original Image
+      ↓
+    preprocess (resize, normalize)
+      ↓
+    YOLO-general (обнаружение еды)
+      ↓
+    YOLO-food (классификация конкретного продукта, опционально)
+      ↓
+    Segmentation (оценка площади по маске/bbox)
+      ↓
+    Classifier (уточнение названия блюда)
+      ↓
+    Heuristic grams (по площади)
+      ↓
+    Macros (пока нули)
+      ↓
+    GPT-mini fallback (по условиям)
     """
 
     def __init__(self):
-        # Reuse global singleton to avoid reloading ONNX model every request
-        self.detector = _get_detector_singleton()
+        # Ensemble singleton will be lazily initialized on first use
+        self.ensemble = get_ensemble_singleton()
 
-    def analyze(self, image_path: str):
+    def analyze(self, image_path: str) -> Dict[str, Any]:
         """
-        YOLO-first analysis entrypoint.
-
-        Args:
-            image_path: path to image on disk.
+        Ensemble-based analysis entrypoint.
 
         Returns:
-            Dict with keys:
-                - products: list[...] (each with product_name, quantity_g, macros)
-                - totals: {...}
-                - meta: {pipeline, yolo_model, fallback_used}
+            {
+              "products": [...],
+              "totals": {...},
+              "meta": {
+                  "pipeline": "ensemble_v1",
+                  "general_yolo_time": ...,
+                  "food_yolo_time": ...,
+                  "segmentation_time": ...,
+                  "classifier_time": ...,
+                  "grams_time": ...,
+                  "fallback_used": bool,
+                  "fallback_time": ...,
+                  "total_time": ...
+              }
+            }
         """
-        logger.info("VisionPipeline: starting analysis for %s", image_path)
+        logger.info("VisionPipeline: starting ensemble_v1 analysis for %s", image_path)
 
         # Global start timer
         t0 = time.perf_counter()
 
-        # 1) Lightweight detector-focused preprocessing
+        # 1) Preprocess (resize, normalize)
         img = preprocess_image(image_path)
         t_preprocessed = time.perf_counter()
 
-        # 2) Local YOLO detection (with graceful degradation)
-        detector = self.detector or _get_detector_singleton()
-        if not detector:
-            # Detector never initialized or failed to load -> direct GPT-vision fallback
+        # Ensure ensemble is available
+        ensemble = self.ensemble or get_ensemble_singleton()
+        if not ensemble:
             logger.warning(
-                "[PIPELINE] YOLO detector unavailable \u2192 using GPT fallback"
+                "[ENSEMBLE] Ensemble unavailable \u2192 using GPT fallback"
             )
-            return self._fallback_gpt(image_path, t_preprocessed)
+            result = self._fallback_gpt(
+                image_path=image_path,
+                t_preprocessed=t_preprocessed,
+                pipeline_name="ensemble_v1",
+            )
+            t_done = time.perf_counter()
+            meta = result.get("meta") or {}
+            meta.setdefault("pipeline", "ensemble_v1")
+            meta.setdefault("general_yolo_time", 0.0)
+            meta.setdefault("food_yolo_time", 0.0)
+            meta.setdefault("segmentation_time", 0.0)
+            meta.setdefault("classifier_time", 0.0)
+            meta.setdefault("grams_time", 0.0)
+            meta["total_time"] = t_done - t0
+            result["meta"] = meta
+            logger.info(
+                "[ENSEMBLE] Total pipeline time %.3fs",
+                t_done - t0,
+            )
+            return result
 
+        # --- Stage timings (initialized to 0 so they are always present in meta) ---
+        general_yolo_time = 0.0
+        food_yolo_time = 0.0
+        segmentation_time = 0.0
+        classifier_time = 0.0
+        grams_time = 0.0
+        fallback_used = False
+        fallback_time = 0.0
+
+        # 2) YOLO-general detection
         try:
-            detections = detector.detect(img)
-            t_detected = time.perf_counter()
+            t_gen_start = time.perf_counter()
+            detections_general = ensemble.detect_general(img)
+            t_gen_end = time.perf_counter()
+            general_yolo_time = t_gen_end - t_gen_start
 
             logger.info(
-                "[PIPELINE] YOLO detected %s objects in %.3f sec: %s",
-                len(detections),
-                t_detected - t_preprocessed,
-                detections,
+                "[ENSEMBLE] YOLO-general detected %s objs in %.3fs: %s",
+                len(detections_general),
+                general_yolo_time,
+                detections_general,
             )
-
         except Exception as e:
-            logger.error("[PIPELINE] YOLO detection FAILED, error=%s", e)
-            return self._fallback_gpt(image_path, t_preprocessed)
+            logger.error("[ENSEMBLE] YOLO-general FAILED, error=%s", e)
+            result = self._fallback_gpt(
+                image_path=image_path,
+                t_preprocessed=t_preprocessed,
+                pipeline_name="ensemble_v1",
+            )
+            t_done = time.perf_counter()
+            meta = result.get("meta") or {}
+            meta.setdefault("pipeline", "ensemble_v1")
+            meta.setdefault("general_yolo_time", 0.0)
+            meta.setdefault("food_yolo_time", 0.0)
+            meta.setdefault("segmentation_time", 0.0)
+            meta.setdefault("classifier_time", 0.0)
+            meta.setdefault("grams_time", 0.0)
+            meta["total_time"] = t_done - t0
+            result["meta"] = meta
+            logger.info(
+                "[ENSEMBLE] Total pipeline time %.3fs",
+                t_done - t0,
+            )
+            return result
 
-        # 3) If YOLO found nothing -> GPT fallback + log
-        if not detections:
+        # 3) Filter only "food-like" detections (here: score > 0.3)
+        food_candidates = [
+            d for d in detections_general if d.get("confidence", 0.0) > 0.3
+        ]
+
+        if not food_candidates:
             logger.warning(
-                "[PIPELINE] YOLO returned NO detections \u2192 using GPT fallback"
+                "[ENSEMBLE] No high-confidence detections (score > 0.3) \u2192 GPT fallback"
             )
-            return self._fallback_gpt(image_path, t_preprocessed)
+            result = self._fallback_gpt(
+                image_path=image_path,
+                t_preprocessed=t_preprocessed,
+                pipeline_name="ensemble_v1",
+            )
+            t_done = time.perf_counter()
+            meta = result.get("meta") or {}
+            meta.setdefault("pipeline", "ensemble_v1")
+            meta.setdefault("general_yolo_time", general_yolo_time)
+            meta.setdefault("food_yolo_time", 0.0)
+            meta.setdefault("segmentation_time", 0.0)
+            meta.setdefault("classifier_time", 0.0)
+            meta.setdefault("grams_time", 0.0)
+            meta["total_time"] = t_done - t0
+            result["meta"] = meta
+            logger.info(
+                "[ENSEMBLE] Total pipeline time %.3fs",
+                t_done - t0,
+            )
+            return result
 
-        # 4) Python-only gram estimation (no GPT, KБЖУ=0)
-        products = []
-        for det in detections:
-            grams = det.get("size", 0.0) * BASE_WEIGHT
-            products.append(
-                {
-                    "product_name": det.get("label", "unknown"),
-                    "quantity_g": round(grams, 1),
-                    "kcal": 0,
-                    "protein": 0,
-                    "fat": 0,
-                    "carbs": 0,
-                }
+        # For now, take the top-1 detection by confidence as primary dish
+        food_candidates.sort(key=lambda d: d.get("confidence", 0.0), reverse=True)
+        primary_det = food_candidates[0]
+
+        # 4) YOLO-food refinement (if available)
+        try:
+            t_food_start = time.perf_counter()
+            refined_detections = ensemble.detect_food(img, food_candidates)
+            t_food_end = time.perf_counter()
+            food_yolo_time = t_food_end - t_food_start
+
+            logger.info(
+                "[ENSEMBLE] YOLO-food classified: %s in %.3fs",
+                refined_detections,
+                food_yolo_time,
+            )
+        except Exception as e:
+            logger.error("[ENSEMBLE] YOLO-food stage FAILED, error=%s", e)
+            refined_detections = food_candidates
+            t_food_end = time.perf_counter()
+            food_yolo_time = t_food_end - t_food_start
+
+        primary_refined = refined_detections[0] if refined_detections else primary_det
+        bbox = primary_refined.get("bbox") or primary_det.get("bbox")
+        if not bbox:
+            logger.warning(
+                "[ENSEMBLE] Primary detection has no bbox \u2192 GPT fallback"
+            )
+            result = self._fallback_gpt(
+                image_path=image_path,
+                t_preprocessed=t_preprocessed,
+                pipeline_name="ensemble_v1",
+            )
+            t_done = time.perf_counter()
+            meta = result.get("meta") or {}
+            meta.setdefault("pipeline", "ensemble_v1")
+            meta.setdefault("general_yolo_time", general_yolo_time)
+            meta.setdefault("food_yolo_time", food_yolo_time)
+            meta.setdefault("segmentation_time", 0.0)
+            meta.setdefault("classifier_time", 0.0)
+            meta.setdefault("grams_time", 0.0)
+            meta["total_time"] = t_done - t0
+            result["meta"] = meta
+            logger.info(
+                "[ENSEMBLE] Total pipeline time %.3fs",
+                t_done - t0,
+            )
+            return result
+
+        # 5) Segmentation for bbox (current impl: bbox-mask)
+        try:
+            t_seg_start = time.perf_counter()
+            mask = ensemble.segment_mask(img, bbox)
+            t_seg_end = time.perf_counter()
+            segmentation_time = t_seg_end - t_seg_start
+
+            # Compute normalized area from mask
+            mask_pixels = float(np.count_nonzero(mask))
+            image_pixels = float(mask.size) if mask is not None else 0.0
+            area_normalized = (mask_pixels / image_pixels) if image_pixels > 0 else 0.0
+
+            logger.info(
+                "[ENSEMBLE] Segmentation area=%.4f in %.3fs",
+                area_normalized,
+                segmentation_time,
+            )
+        except Exception as e:
+            logger.error("[ENSEMBLE] Segmentation FAILED, error=%s", e)
+            result = self._fallback_gpt(
+                image_path=image_path,
+                t_preprocessed=t_preprocessed,
+                pipeline_name="ensemble_v1",
+            )
+            t_done = time.perf_counter()
+            meta = result.get("meta") or {}
+            meta.setdefault("pipeline", "ensemble_v1")
+            meta.setdefault("general_yolo_time", general_yolo_time)
+            meta.setdefault("food_yolo_time", food_yolo_time)
+            meta.setdefault("segmentation_time", 0.0)
+            meta.setdefault("classifier_time", 0.0)
+            meta.setdefault("grams_time", 0.0)
+            meta["total_time"] = t_done - t0
+            result["meta"] = meta
+            logger.info(
+                "[ENSEMBLE] Total pipeline time %.3fs",
+                t_done - t0,
+            )
+            return result
+
+        # 6) Classifier refine
+        try:
+            t_clf_start = time.perf_counter()
+            food_name, classifier_conf = ensemble.classify_crop(img, bbox)
+            t_clf_end = time.perf_counter()
+            classifier_time = t_clf_end - t_clf_start
+
+            logger.info(
+                "[ENSEMBLE] Classifier label=%s conf=%.3f in %.3fs",
+                food_name,
+                classifier_conf,
+                classifier_time,
+            )
+        except Exception as e:
+            logger.error("[ENSEMBLE] Classifier FAILED, error=%s", e)
+            food_name, classifier_conf = "ambiguous", 0.0
+            t_clf_end = time.perf_counter()
+            classifier_time = t_clf_end - t_clf_start
+
+        # 7) Grams estimation (size-based)
+        t_grams_start = time.perf_counter()
+        grams = area_normalized * PLATE_GRAMS
+        t_grams_end = time.perf_counter()
+        grams_time = t_grams_end - t_grams_start
+
+        logger.info("[ENSEMBLE] Grams=%s in %.3fs", grams, grams_time)
+
+        # 8) Fallback condition based on classifier
+        if classifier_conf < 0.40 or food_name == "ambiguous":
+            # Low confidence / ambiguous dish: use GPT fallback
+            t_fb_start = time.perf_counter()
+            result = self._fallback_gpt(
+                image_path=image_path,
+                t_preprocessed=t_preprocessed,
+                pipeline_name="ensemble_v1",
+            )
+            t_fb_end = time.perf_counter()
+            fallback_used = True
+            fallback_time = t_fb_end - t_fb_start
+
+            logger.info(
+                "[ENSEMBLE] Fallback GPT used in %.3fs",
+                fallback_time,
             )
 
-        # 5) Totals = zeros
+            t_done = time.perf_counter()
+            meta = result.get("meta") or {}
+            meta.setdefault("pipeline", "ensemble_v1")
+            meta.setdefault("general_yolo_time", general_yolo_time)
+            meta.setdefault("food_yolo_time", food_yolo_time)
+            meta.setdefault("segmentation_time", segmentation_time)
+            meta.setdefault("classifier_time", classifier_time)
+            meta.setdefault("grams_time", grams_time)
+            meta["fallback_used"] = True
+            meta["fallback_time"] = fallback_time
+            meta["total_time"] = t_done - t0
+            result["meta"] = meta
+
+            logger.info(
+                "[ENSEMBLE] Total pipeline time %.3fs",
+                t_done - t0,
+            )
+            return result
+
+        # 9) No fallback: build YOLO-only ensemble result
+        products = [
+            {
+                "product_name": food_name,
+                "quantity_g": round(grams, 1),
+                "kcal": 0,
+                "protein": 0,
+                "fat": 0,
+                "carbs": 0,
+            }
+        ]
+
         totals = {"kcal": 0, "protein": 0, "fat": 0, "carbs": 0}
 
-        # 6) Final YOLO-path timing log
         t_done = time.perf_counter()
 
         logger.info(
-            "[PIPELINE] Completed via YOLO-only path: preprocess=%.3fs, detect=%.3fs, python_refine=%.3fs, total=%.3fs",
-            t_preprocessed - t0,
-            t_detected - t_preprocessed,
-            t_done - t_detected,
+            "[ENSEMBLE] Total pipeline time %.3fs",
             t_done - t0,
         )
 
-        # 10) Final JSON response
+        meta = {
+            "pipeline": "ensemble_v1",
+            "general_yolo_time": general_yolo_time,
+            "food_yolo_time": food_yolo_time,
+            "segmentation_time": segmentation_time,
+            "classifier_time": classifier_time,
+            "grams_time": grams_time,
+            "fallback_used": fallback_used,
+            "fallback_time": fallback_time,
+            "total_time": t_done - t0,
+        }
+
         return {
             "products": products,
             "totals": totals,
-            "meta": {
-                "pipeline": "yolo_only",
-                "yolo_model": "yolov8n.onnx",
-                "fallback_used": False,
-            },
+            "meta": meta,
         }
 
-    def _fallback_gpt(self, image_path: str, t_preprocessed: float):
+    def _fallback_gpt(
+        self, image_path: str, t_preprocessed: float, pipeline_name: str = "ensemble_v1"
+    ) -> Dict[str, Any]:
         """
         Fallback path that uses GPT-vision-based analysis with detailed timing logs.
-        """
-        import time
 
+        This is used when:
+        - ensemble is unavailable
+        - YOLO-general / segmentation / classifier fail
+        - classifier is low-confidence or ambiguous
+        """
         t_before_gpt = time.perf_counter()
 
-        # 7) Call GPT-vision fallback
+        # Call GPT-vision fallback
         result = fallback_analyze_food(image_path)
 
         t_after_gpt = time.perf_counter()
+        gpt_time = t_after_gpt - t_before_gpt
 
-        logger.warning(
-            "[PIPELINE] GPT fallback used: gpt_time=%.3fs, from_preprocess_to_gpt=%.3fs",
-            t_after_gpt - t_before_gpt,
+        logger.info(
+            "[ENSEMBLE] Fallback GPT used in %.3fs (from preprocess=%.3fs)",
+            gpt_time,
             t_after_gpt - t_preprocessed,
         )
 
-        # Ensure meta block with fallback flag set
+        # Ensure meta block with ensemble fields
         meta = result.get("meta") or {}
-        meta.setdefault("pipeline", "yolo_only")
-        meta.setdefault("yolo_model", "yolov8n.onnx")
+        meta.setdefault("pipeline", pipeline_name)
+        meta.setdefault("general_yolo_time", 0.0)
+        meta.setdefault("food_yolo_time", 0.0)
+        meta.setdefault("segmentation_time", 0.0)
+        meta.setdefault("classifier_time", 0.0)
+        meta.setdefault("grams_time", 0.0)
         meta["fallback_used"] = True
+        meta["fallback_time"] = gpt_time
         result["meta"] = meta
 
         return result
