@@ -10,10 +10,15 @@ MODEL_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "models")
 )
 
-YOLO_GENERAL_PATH = os.path.join(MODEL_DIR, "yolo_general.onnx")
-YOLO_FOOD_PATH = os.path.join(MODEL_DIR, "yolo_food.onnx")
-SEGMENTOR_PATH = os.path.join(MODEL_DIR, "segmentor.onnx")
-CLASSIFIER_PATH = os.path.join(MODEL_DIR, "classifier.onnx")
+# NOTE: models are stored in subfolders under `models/`:
+#   - models/general_model/yolo_general.onnx
+#   - models/food_recognition/yolo_food.onnx
+#   - models/segmetation/segmentor.onnx
+#   - models/food_classifier/classifier.onnx
+YOLO_GENERAL_PATH = os.path.join(MODEL_DIR, "general_model", "yolo_general.onnx")
+YOLO_FOOD_PATH = os.path.join(MODEL_DIR, "food_recognition", "yolo_food.onnx")
+SEGMENTOR_PATH = os.path.join(MODEL_DIR, "segmetation", "segmentor.onnx")
+CLASSIFIER_PATH = os.path.join(MODEL_DIR, "food_classifier", "classifier.onnx")
 
 # Grams per full-plate normalized area (1.0) as requested
 PLATE_GRAMS = 350.0
@@ -148,6 +153,15 @@ class Ensemble:
             self.classifier_h = 224
             self.classifier_w = 224
 
+        # Summary of model availability at initialization
+        logger.info(
+            "Ensemble models status: general=LOADED path=%s, food=%s, segmentor=%s, classifier=%s",
+            general_model_path,
+            "LOADED" if self.food_session is not None else "UNAVAILABLE",
+            "LOADED" if self.segmentor_session is not None else "UNAVAILABLE",
+            "LOADED" if self.classifier_session is not None else "UNAVAILABLE",
+        )
+
     # -------------------------------------------------------------------------
     # 1) General YOLO detection (COCO)
     # -------------------------------------------------------------------------
@@ -252,6 +266,10 @@ class Ensemble:
 
         if self.food_session is None:
             # Mark that food refinement was not performed
+            logger.info(
+                "[ENSEMBLE] YOLO-food disabled (no session); passing through %d detections",
+                len(general_detections),
+            )
             for det in general_detections:
                 det.setdefault("food_cls_id", None)
             return general_detections

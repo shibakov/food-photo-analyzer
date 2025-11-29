@@ -9,11 +9,8 @@ AI-powered food photo analysis API that detects ingredients and calculates nutri
 pip install -r requirements.txt
 ```
 
-2. Download YOLOv8n ONNX model (for fast local /recognize pipeline):
-```bash
-mkdir -p models
-wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx -O models/yolov8n.onnx
-```
+2. Ensure models are present (they are stored in the repository under `models/` and tracked in git;
+   no manual download is required for the default setup).
 
 3. Set the OpenAI API key:
 ```bash
@@ -44,7 +41,7 @@ docker run --env OPENAI_API_KEY=your_key_here -p 8080:8080 food-photo-analyzer
 **POST** `/recognize` or `/api/recognize`
 
 Fast endpoint that uses:
-- local YOLOv8n ONNX detector (`models/yolov8n.onnx`)
+- local ONNX ensemble models (see `models/` directory)
 - lightweight GPT-4o-mini refiner with built-in nutrition table
 - fallback to GPT-vision only if detector finds no food objects
 

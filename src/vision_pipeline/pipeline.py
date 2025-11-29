@@ -95,6 +95,14 @@ class VisionPipeline:
             )
             return result
 
+        # Log per-request model availability snapshot
+        logger.info(
+            "[ENSEMBLE] Models on request: general=ENABLED, food=%s, segmentor=%s, classifier=%s",
+            "ENABLED" if getattr(ensemble, "food_session", None) is not None else "DISABLED",
+            "ENABLED" if getattr(ensemble, "segmentor_session", None) is not None else "DISABLED",
+            "ENABLED" if getattr(ensemble, "classifier_session", None) is not None else "DISABLED",
+        )
+
         # --- Stage timings (initialized to 0 so they are always present in meta) ---
         general_yolo_time = 0.0
         food_yolo_time = 0.0
@@ -220,6 +228,10 @@ class VisionPipeline:
             return result
 
         # 5) Segmentation for bbox (current impl: bbox-mask)
+        logger.info(
+            "[ENSEMBLE] Segmentation stage: segmentor_session=%s (logic=bbox-only)",
+            "PRESENT" if getattr(ensemble, "segmentor_session", None) is not None else "ABSENT",
+        )
         try:
             t_seg_start = time.perf_counter()
             mask = ensemble.segment_mask(img, bbox)
@@ -260,6 +272,10 @@ class VisionPipeline:
             return result
 
         # 6) Classifier refine
+        logger.info(
+            "[ENSEMBLE] Classifier stage: session=%s",
+            "PRESENT" if getattr(ensemble, "classifier_session", None) is not None else "ABSENT",
+        )
         try:
             t_clf_start = time.perf_counter()
             food_name, classifier_conf = ensemble.classify_crop(img, bbox)
