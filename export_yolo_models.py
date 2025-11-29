@@ -5,12 +5,12 @@ from onnx import checker
 
 MODELS = [
     {
-        "source": "models/food_recognition/yolov8n-food-detection.pt",
+        "source": "models_dev/food_recognition/yolov8n-food-detection.pt",
         "target": "models/food_recognition/yolo_food.onnx",
         "imgsz": 640,
     },
     {
-        "source": "models/segmetation/yolov8n-segmentation.pt",
+        "source": "models_dev/segmetation/yolov8n-segmentation.pt",
         "target": "models/segmetation/segmentor.onnx",
         "imgsz": 640,
     },

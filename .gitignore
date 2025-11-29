@@ -26,5 +26,5 @@ env/
 htmlcov/
 
 # Local models and large artifacts
-models/
+models_dev/
 checkpoints/

@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoConfig, AutoModelForImageClassification
 
-MODEL_DIR = "models/food_classifier"
+MODEL_DIR = "models_dev/food_classifier"
 ONNX_PATH = "models/food_classifier/classifier.onnx"
 LABELS_PATH = "models/food_classifier/classifier_labels.json"
 
