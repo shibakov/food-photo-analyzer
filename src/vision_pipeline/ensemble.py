@@ -114,33 +114,51 @@ class Ensemble:
             self.segmentor_input = None
             self.segmentor_output = None
 
-        # Classifier
+        # Classifier (two-file ONNX format: classifier.onnx + classifier.onnx.data)
         if os.path.exists(classifier_model_path):
-            try:
-                logger.info(
-                    "Initializing Ensemble classifier from %s", classifier_model_path
+            classifier_data_path = classifier_model_path + ".data"
+            if not os.path.exists(classifier_data_path):
+                logger.error(
+                    "Failed to load classifier: expected classifier.onnx + classifier.onnx.data"
                 )
-                self.classifier_session = ort.InferenceSession(
-                    classifier_model_path, providers=["CPUExecutionProvider"]
-                )
-                self.classifier_input = self.classifier_session.get_inputs()[0].name
-                self.classifier_output = self.classifier_session.get_outputs()[0].name
-                # Try to infer input spatial size (e.g. 224x224)
-                in_shape = self.classifier_session.get_inputs()[0].shape
-                # Typical shapes: [1, 3, H, W] or [None, 3, H, W]
-                if len(in_shape) == 4:
-                    self.classifier_h = int(in_shape[2] or 224)
-                    self.classifier_w = int(in_shape[3] or 224)
-                else:
-                    self.classifier_h = 224
-                    self.classifier_w = 224
-            except Exception as e:
-                logger.error("Failed to initialize classifier model: %s", e)
                 self.classifier_session = None
                 self.classifier_input = None
                 self.classifier_output = None
                 self.classifier_h = 224
                 self.classifier_w = 224
+            else:
+                try:
+                    logger.info(
+                        "Initializing Ensemble classifier from %s", classifier_model_path
+                    )
+                    self.classifier_session = ort.InferenceSession(
+                        classifier_model_path, providers=["CPUExecutionProvider"]
+                    )
+                    self.classifier_input = self.classifier_session.get_inputs()[0].name
+                    self.classifier_output = (
+                        self.classifier_session.get_outputs()[0].name
+                    )
+                    # Try to infer input spatial size (e.g. 224x224)
+                    in_shape = self.classifier_session.get_inputs()[0].shape
+                    # Typical shapes: [1, 3, H, W] or [None, 3, H, W]
+                    if len(in_shape) == 4:
+                        self.classifier_h = int(in_shape[2] or 224)
+                        self.classifier_w = int(in_shape[3] or 224)
+                    else:
+                        self.classifier_h = 224
+                        self.classifier_w = 224
+
+                    logger.info(
+                        "Classifier model loaded: %s (two-file ONNX format)",
+                        classifier_model_path,
+                    )
+                except Exception as e:
+                    logger.error("Failed to initialize classifier model: %s", e)
+                    self.classifier_session = None
+                    self.classifier_input = None
+                    self.classifier_output = None
+                    self.classifier_h = 224
+                    self.classifier_w = 224
         else:
             logger.warning(
                 "Classifier model not found at %s. "

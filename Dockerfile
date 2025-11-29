@@ -14,6 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Optional: if models/yolov8n.onnx is present in the build context, it will be copied via the line below.
 # The app is resilient to missing YOLO model and will fall back to GPT-vision if the model is unavailable.
 COPY . .
+# Ensure models (including classifier.onnx + classifier.onnx.data) are bundled into the image
+COPY models/ /app/models/
 
 # Models are stored in the repository under /app/models (see models/ directory).
 # No model download is performed at build time; the image relies on bundled models.

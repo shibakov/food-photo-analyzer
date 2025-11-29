@@ -278,15 +278,23 @@ class VisionPipeline:
         )
         try:
             t_clf_start = time.perf_counter()
+            if getattr(ensemble, "classifier_session", None) is not None:
+                logger.info(
+                    "[ENSEMBLE] Classifier: loaded OK (onnx=True, external_data=True)"
+                )
+            else:
+                logger.info(
+                    "[ENSEMBLE] Classifier: DISABLED or unavailable (fallback may be used)"
+                )
+
             food_name, classifier_conf = ensemble.classify_crop(img, bbox)
             t_clf_end = time.perf_counter()
             classifier_time = t_clf_end - t_clf_start
 
             logger.info(
-                "[ENSEMBLE] Classifier label=%s conf=%.3f in %.3fs",
+                '[ENSEMBLE] Classifier inference: class="%s", conf=%.3f',
                 food_name,
                 classifier_conf,
-                classifier_time,
             )
         except Exception as e:
             logger.error("[ENSEMBLE] Classifier FAILED, error=%s", e)
