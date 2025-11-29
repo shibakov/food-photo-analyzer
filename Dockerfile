@@ -18,9 +18,11 @@ COPY . .
 
 # Download YOLOv8n ONNX model during build so it is always present in the container.
 # Source: https://github.com/shoz-f/onnx_interp/releases/download/models/yolov8n.onnx
+# Also create yolo_general.onnx as an alias, which is what Ensemble expects.
 RUN mkdir -p /app/models && \
     curl -L "https://github.com/shoz-f/onnx_interp/releases/download/models/yolov8n.onnx" \
-         -o /app/models/yolov8n.onnx
+         -o /app/models/yolov8n.onnx && \
+    cp /app/models/yolov8n.onnx /app/models/yolo_general.onnx
 
 # Railway сам проставляет PORT, но можно задать дефолт локально
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080} --log-level info --workers ${UVICORN_WORKERS:-2}"]
